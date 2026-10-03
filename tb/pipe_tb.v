@@ -35,9 +35,13 @@ reg [8*256-1:0] out_file;
 reg [8*256-1:0] vcd_file;
 reg [8*256-1:0] dmem_dump_file;
 
+wire illegal_instr_ex;
+integer illegal_count;
+
 processor #(.RESET_PC(RESET_PC)) uut(
     .clk(clk),
-    .reset(reset)
+    .reset(reset),
+    .illegal_instr_ex(illegal_instr_ex)
 );
 
 //////////////////////
@@ -55,6 +59,7 @@ initial begin
     reset = 1;
     cycle_count = 0;
     draining = 0;
+    illegal_count = 0;
     #10;
     reset = 0;
 end
@@ -96,6 +101,30 @@ initial begin
     @(posedge draining);
     repeat (4) @(posedge clk);   // allow pipeline to drain
     finish_run("DONE");
+end
+
+//////////////////////
+// ILLEGAL INSTRUCTIONS: reported from EX, so squashed instructions never
+// count. In legacy mode (+ZERO_WORD_STOP) the zero word is the end marker
+// and is not reported.
+//////////////////////
+function [31:0] imem_word;
+    input [63:0] pc;
+    begin
+        imem_word = {uut.IM.mem[(pc + 3) % uut.IMEM_BYTES],
+                     uut.IM.mem[(pc + 2) % uut.IMEM_BYTES],
+                     uut.IM.mem[(pc + 1) % uut.IMEM_BYTES],
+                     uut.IM.mem[pc % uut.IMEM_BYTES]};
+    end
+endfunction
+
+always @(posedge clk) begin
+    if (!reset && illegal_instr_ex &&
+        !(zero_word_stop && imem_word(uut.ID_EX_pc) == 32'b0)) begin
+        $display("ILLEGAL INSTRUCTION 0x%08h at pc 0x%016h (cycle %0d)",
+                 imem_word(uut.ID_EX_pc), uut.ID_EX_pc, cycle_count);
+        illegal_count = illegal_count + 1;
+    end
 end
 
 //////////////////////

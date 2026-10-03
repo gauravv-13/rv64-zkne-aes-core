@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 
+// IF/ID pipeline register. On reset and flush it holds a canonical NOP
+// (addi x0,x0,0), not 0x00000000, which is an illegal instruction.
 module IF_ID (
     input clk,
     input reset,
@@ -13,16 +15,18 @@ module IF_ID (
     output reg [31:0] instr_out
 );
 
+localparam [31:0] NOP = 32'h0000_0013;
+
 always @(posedge clk or posedge reset)
 begin
     if (reset) begin
         pc_out <= 64'd0;
-        instr_out <= 32'd0;
+        instr_out <= NOP;
     end
 
     else if (flush) begin
         pc_out <= 64'd0;
-        instr_out <= 32'd0;
+        instr_out <= NOP;
     end
 
     else if (write_enable) begin

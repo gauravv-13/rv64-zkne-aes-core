@@ -6,7 +6,10 @@ module processor #(
     parameter        DMEM_BYTES = 65536
 ) (
     input clk,
-    input reset
+    input reset,
+    // High for one cycle when an illegal instruction reaches EX
+    // (squashed instructions never do). The core has no traps.
+    output illegal_instr_ex
 );
 
 reg [63:0] PC;
@@ -63,14 +66,16 @@ wire [4:0] rd;
 wire [2:0] funct3;
 wire [4:0] rs1;
 wire [4:0] rs2;
-wire funct7;
+wire [6:0] funct7;
+wire [3:0] rnum;
 
 assign opcode = IF_ID_instr[6:0];
 assign rd     = IF_ID_instr[11:7];
 assign funct3 = IF_ID_instr[14:12];
 assign rs1    = IF_ID_instr[19:15];
 assign rs2    = IF_ID_instr[24:20];
-assign funct7 = IF_ID_instr[30];
+assign funct7 = IF_ID_instr[31:25];
+assign rnum   = IF_ID_instr[23:20];
 
 wire RegWrite;
 wire MemRead;
@@ -80,9 +85,12 @@ wire ALUSrc;
 wire [1:0] ALUSrcA;
 wire Branch;
 wire [1:0] ALUOp;
+wire illegal_instr;
 
 control CU(
     .opcode(opcode),
+    .funct3(funct3),
+    .funct7(funct7),
     .RegWrite(RegWrite),
     .MemRead(MemRead),
     .MemWrite(MemWrite),
@@ -90,7 +98,8 @@ control CU(
     .ALUSrc(ALUSrc),
     .ALUSrcA(ALUSrcA),
     .Branch(Branch),
-    .ALUOp(ALUOp)
+    .ALUOp(ALUOp),
+    .illegal_instr(illegal_instr)
 );
 
 wire stall;
@@ -140,7 +149,9 @@ wire [4:0] ID_EX_rs1;
 wire [4:0] ID_EX_rs2;
 
 wire [2:0] ID_EX_funct3;
-wire ID_EX_funct7;
+wire [6:0] ID_EX_funct7;
+wire [3:0] ID_EX_rnum;
+wire ID_EX_illegal;
 
 wire ID_EX_RegWrite;
 wire ID_EX_MemWrite;
@@ -167,6 +178,8 @@ ID_EX idex(
 
     .funct3_in(funct3),
     .funct7_in(funct7),
+    .rnum_in(rnum),
+    .illegal_in((stall | branch_taken) ? 1'b0 : illegal_instr),
 
     .RegWrite_in((stall | branch_taken) ? 1'b0 : RegWrite),
     .MemRead_in((stall | branch_taken) ? 1'b0 : MemRead),
@@ -188,6 +201,8 @@ ID_EX idex(
 
     .funct3_out(ID_EX_funct3),
     .funct7_out(ID_EX_funct7),
+    .rnum_out(ID_EX_rnum),
+    .illegal_out(ID_EX_illegal),
 
     .RegWrite_out(ID_EX_RegWrite),
     .MemRead_out(ID_EX_MemRead),
@@ -257,7 +272,10 @@ alu ALU(
     .zero_flag(zero)
 );
 
-assign branch_taken = ID_EX_Branch & zero;
+assign illegal_instr_ex = ID_EX_illegal;
+
+// beq (funct3=000): taken if equal; bne (funct3=001): taken if not equal.
+assign branch_taken = ID_EX_Branch & (ID_EX_funct3[0] ? ~zero : zero);
 wire [63:0] branch_target = ID_EX_pc + ID_EX_imm;
 assign PC_next = branch_taken ? branch_target : PC_plus4;
 

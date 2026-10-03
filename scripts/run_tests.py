@@ -200,6 +200,44 @@ def test_endian():
     return check_expect(ROOT / "tests/isa/endian.S")
 
 
+def symbols(elf, prefix):
+    """{name: address} for ELF symbols starting with prefix."""
+    syms = {}
+    for line in sh([CROSS + "nm", str(elf)]).splitlines():
+        addr, _, name = line.split()
+        if name.startswith(prefix):
+            syms[name] = int(addr, 16)
+    return syms
+
+
+def illegal_reports(stdout):
+    """PCs from the testbench's 'ILLEGAL INSTRUCTION 0x... at pc 0x...' lines."""
+    return [int(pc, 16) for pc in
+            re.findall(r"ILLEGAL INSTRUCTION 0x[0-9a-f]+ at pc 0x([0-9a-f]+)", stdout)]
+
+
+@test("isa D: beq/bne decode, taken/not-taken, squash, forwarding")
+def test_branch():
+    return check_expect(ROOT / "tests/isa/branch.S")
+
+
+@test("isa D: every undecoded encoding raises illegal_instr (exactly once)")
+def test_illegal_encodings():
+    src = ROOT / "tests/isa/illegal_encodings.S"
+    detail = check_expect(src)
+    _, _, out, _ = run_program(src)
+    want = symbols(BUILD / "prog" / "illegal_encodings.elf", "ill_")
+    got = illegal_reports(out)
+    by_pc = {a: n for n, a in want.items()}
+    missing = sorted(n for n, a in want.items() if got.count(a) == 0)
+    dup = sorted(by_pc.get(a, hex(a)) for a in set(got) if got.count(a) > 1)
+    extra = sorted(hex(a) for a in set(got) if a not in by_pc)
+    if missing or dup or extra:
+        raise TestFailure(f"not reported: {missing}\nreported more than once: {dup}\n"
+                          f"reported but legal: {extra}")
+    return f"{len(want)} illegal encodings reported; {detail}"
+
+
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()

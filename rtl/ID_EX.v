@@ -16,7 +16,9 @@ module ID_EX (
     input [4:0] rd_in,
 
     input [2:0] funct3_in,
-    input funct7_in,
+    input [6:0] funct7_in,
+    input [3:0] rnum_in,          // instr[23:20] (aes64ks1i round number)
+    input illegal_in,
 
     input RegWrite_in,
     input MemRead_in,
@@ -37,7 +39,9 @@ module ID_EX (
     output reg [4:0] rd_out,
 
     output reg [2:0] funct3_out,
-    output reg funct7_out,
+    output reg [6:0] funct7_out,
+    output reg [3:0] rnum_out,
+    output reg illegal_out,
 
     output reg RegWrite_out,
     output reg MemRead_out,
@@ -63,6 +67,8 @@ begin
 
         funct3_out <= 0;
         funct7_out <= 0;
+        rnum_out <= 0;
+        illegal_out <= 0;
 
         RegWrite_out <= 0;
         MemRead_out <= 0;
@@ -77,6 +83,7 @@ begin
         rs1_out <= 0;
         rs2_out <= 0;
         rd_out <= 0;
+        illegal_out <= 0;
         RegWrite_out <= 0;
         MemRead_out <= 0;
         MemWrite_out <= 0;
@@ -98,6 +105,8 @@ begin
 
         funct3_out <= funct3_in;
         funct7_out <= funct7_in;
+        rnum_out <= rnum_in;
+        illegal_out <= illegal_in;
 
         RegWrite_out <= RegWrite_in;
         MemRead_out <= MemRead_in;

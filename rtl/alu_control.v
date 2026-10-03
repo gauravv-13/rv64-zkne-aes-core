@@ -2,7 +2,7 @@
 
 module alu_control(
     input [1:0] ALUOp,
-    input funct7,
+    input [6:0] funct7,
     input [2:0] funct3,
     output reg [3:0] ALUControl
 );
@@ -14,7 +14,7 @@ always @(*) begin
         2'b10: begin
             case(funct3)
                 3'b000: begin
-                    if (funct7 == 1'b0)
+                    if (funct7[5] == 1'b0)      // instr[30]: add / sub
                         ALUControl = 4'b0010;
                     else
                         ALUControl = 4'b0110;

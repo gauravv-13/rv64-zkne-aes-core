@@ -19,3 +19,10 @@ lint_off -rule DECLFILENAME -file "*rtl/pc.v"
 // data_mem.v), so the upper address bits are intentionally unused.
 lint_off -rule UNUSEDSIGNAL -file "*rtl/instruction_mem.v" -match "*'addr'*"
 lint_off -rule UNUSEDSIGNAL -file "*rtl/data_mem.v" -match "*'address'*"
+
+// TEMPORARY: ID_EX carries rnum (instr[23:20]) to EX for aes64ks1i, which
+// is added in Step 3. Remove this waiver then.
+lint_off -rule UNUSEDSIGNAL -file "*rtl/processor.v" -match "*'ID_EX_rnum'*"
+// TEMPORARY: alu_control receives the full funct7; the Zkne decode in Step 3
+// uses the other bits. Remove this waiver then.
+lint_off -rule UNUSEDSIGNAL -file "*rtl/alu_control.v" -match "*'funct7'*"
