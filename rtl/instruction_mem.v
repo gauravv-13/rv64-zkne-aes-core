@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 `define IMEM_SIZE 4096
 
 module instruction_mem (
@@ -8,13 +10,16 @@ module instruction_mem (
     reg [7:0] mem [0:`IMEM_SIZE-1]; 
     integer i, file, status;
     reg [7:0] line_data;
+    reg [8*256-1:0] imem_file;   // program image path (simulation only)
 
     initial begin
     
         for (i = 0; i < `IMEM_SIZE; i = i + 1)
             mem[i] = 8'b0;
 
-        file = $fopen("instructions.txt", "r");
+        if (!$value$plusargs("IMEM=%s", imem_file))
+            imem_file = "instructions.txt";
+        file = $fopen(imem_file, "r");
         if (file) begin
             i = 0;
             while (!$feof(file) && i < `IMEM_SIZE) begin

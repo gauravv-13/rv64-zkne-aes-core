@@ -7,6 +7,15 @@ module processor(
 
 reg [63:0] PC;
 
+// Declared up front: these are used (by the hazard/forwarding units and
+// IF/ID) before the stage that drives them appears below.
+wire IF_ID_Write;
+wire ID_EX_MemRead;
+wire [4:0] ID_EX_rd;
+wire EX_MEM_RegWrite;
+wire [4:0] EX_MEM_rd;
+wire [63:0] EX_MEM_alu;
+
 wire [63:0] PC_next;
 wire [63:0] PC_plus4;
 
@@ -78,7 +87,6 @@ control CU(
     .ALUOp(ALUOp)
 );
 
-wire IF_ID_Write;
 wire stall;
 
 hazard_detection_unit HDU(
@@ -124,13 +132,11 @@ wire [63:0] ID_EX_imm;
 
 wire [4:0] ID_EX_rs1;
 wire [4:0] ID_EX_rs2;
-wire [4:0] ID_EX_rd;
 
 wire [2:0] ID_EX_funct3;
 wire ID_EX_funct7;
 
 wire ID_EX_RegWrite;
-wire ID_EX_MemRead;
 wire ID_EX_MemWrite;
 wire ID_EX_MemtoReg;
 wire ID_EX_ALUSrc;
@@ -239,10 +245,7 @@ assign branch_taken = ID_EX_Branch & zero;
 wire [63:0] branch_target = ID_EX_pc + ID_EX_imm;
 assign PC_next = branch_taken ? branch_target : PC_plus4;
 
-wire [63:0] EX_MEM_alu;
 wire [63:0] EX_MEM_write_data;
-wire [4:0] EX_MEM_rd;
-wire EX_MEM_RegWrite;
 wire EX_MEM_MemRead;
 wire EX_MEM_MemWrite;
 wire EX_MEM_MemtoReg;

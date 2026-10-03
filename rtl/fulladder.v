@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module fulladder (
     input  a,
     input  b,

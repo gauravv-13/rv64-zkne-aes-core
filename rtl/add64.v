@@ -1,30 +1,26 @@
-module sub64(a,b,y,carry,overflow,zero);
+`timescale 1ns/1ps
+
+module add64(a,b,y,carry,overflow,zero);
     input [63:0] a;
     input [63:0] b;
     output [63:0] y;
     output carry;
     output overflow;
     output zero;
-    wire [63:0] nb;
     wire [64:0] c;
     wire s1;
     wire s2;
+    assign c[0]=1'b0;
     genvar i;
     generate
-        for(i=0;i<64;i=i+1) begin:inv
-            not(nb[i],b[i]);
-        end
-    endgenerate
-    assign c[0]=1'b1;
-    generate
         for(i=0;i<64;i=i+1) begin:fa
-            fulladder f(a[i],nb[i],c[i],y[i],c[i+1]);
+            fulladder f(a[i],b[i],c[i],y[i],c[i+1]);
         end
     endgenerate
     assign carry=c[64];
     xor(s1,a[63],b[63]);
     xor(s2,a[63],y[63]);
-    and(overflow,s1,s2);
+    and(overflow,~s1,s2);
     nor(zero,
         y[0],y[1],y[2],y[3],y[4],y[5],y[6],y[7],
         y[8],y[9],y[10],y[11],y[12],y[13],y[14],y[15],

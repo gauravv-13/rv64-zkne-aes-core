@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module ForwardingUnit(
     input EX_MEM_RegWrite,
     input MEM_WB_RegWrite,

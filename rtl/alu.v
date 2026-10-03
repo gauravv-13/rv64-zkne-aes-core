@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module alu(input1, input2, control_signal, result, zero_flag);
 
     input  [63:0] input1;

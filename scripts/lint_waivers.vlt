@@ -1,0 +1,16 @@
+`verilator_config
+// Waivers for `make lint`. Each one is a known, intentional case.
+
+// The ALU instantiates the gate-level add64/sub64, whose carry and
+// overflow outputs the core does not use (no slt/sltu/branch-on-compare).
+lint_off -rule UNUSEDSIGNAL -file "*rtl/alu.v" -match "*'c_add'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/alu.v" -match "*'c_sub'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/alu.v" -match "*'o_add'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/alu.v" -match "*'o_sub'*"
+
+// EX_MEM carries Branch through, but nothing after EX uses it.
+lint_off -rule PINCONNECTEMPTY -file "*rtl/processor.v" -match "*'Branch_out'*"
+
+// pc.v is an unused leftover module, kept so the file set matches the
+// original project.
+lint_off -rule DECLFILENAME -file "*rtl/pc.v"

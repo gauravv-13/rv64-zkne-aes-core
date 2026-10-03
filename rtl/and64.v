@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module and64(a,b,y,zero);
     input [63:0] a;
     input [63:0] b;
