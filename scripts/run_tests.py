@@ -7,11 +7,17 @@
 The process exits non-zero if any test fails.
 """
 import argparse
+import json
+import os
 import pathlib
+import random
 import re
 import subprocess
 import sys
 import traceback
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import zkne_golden as golden  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
@@ -20,6 +26,7 @@ TB = ROOT / "tb" / "pipe_tb.v"
 SW = ROOT / "sw"
 CROSS = "riscv64-unknown-elf-"
 MARCH = "rv64i_zkne"
+SPIKE_ISA = "rv64i_zkne"
 
 
 class TestFailure(Exception):
@@ -66,14 +73,18 @@ def run_sim(vvp, plusargs):
     return out
 
 
-def assemble(src):
-    """Assemble + link a test program; returns the ELF path."""
+def assemble(src, defines=None, tag=""):
+    """Assemble + link a test program; returns the ELF path.
+
+    defines: {name: value} passed as -D to the C preprocessor (for .S
+    files); tag: suffix for the output name when building variants."""
     src = pathlib.Path(src)
-    out = BUILD / "prog" / (src.stem + ".elf")
+    out = BUILD / "prog" / (src.stem + tag + ".elf")
     out.parent.mkdir(parents=True, exist_ok=True)
     sh([CROSS + "gcc", f"-march={MARCH}", "-mabi=lp64", "-nostdlib", "-nostartfiles",
-        "-Wl,--no-warn-rwx-segments", f"-I{SW}", "-T", str(SW / "link.ld"),
-        str(src), "-o", str(out)])
+        "-Wl,--no-warn-rwx-segments", f"-I{SW}", "-T", str(SW / "link.ld")]
+       + [f"-D{k}={v}" for k, v in (defines or {}).items()]
+       + [str(src), "-o", str(out)])
     return out
 
 
@@ -127,12 +138,14 @@ def illegal_reports(stdout):
             re.findall(r"ILLEGAL INSTRUCTION 0x[0-9a-f]+ at pc 0x([0-9a-f]+)", stdout)]
 
 
-def run_program(src, max_cycles=2000, defines=(), dump_dmem=False, extra=(), expect_done=True):
+def run_program(src, max_cycles=2000, defines=(), dump_dmem=False, extra=(), expect_done=True,
+                asm_defines=None, tag=""):
     """Assemble, simulate and return (registers[32], cycles, stdout, dmem bytes or None).
 
     extra: additional plusargs. expect_done=False returns even if the run did
-    not end with RESULT: DONE (for tests that check a failing run)."""
-    elf = assemble(src)
+    not end with RESULT: DONE (for tests that check a failing run).
+    asm_defines/tag: see assemble()."""
+    elf = assemble(src, asm_defines, tag)
     img = make_image(elf)
     regs_file = elf.with_suffix(".regs")
     regs_file.unlink(missing_ok=True)
@@ -174,6 +187,91 @@ def check_expect(src, **kw):
     n_mem = sum(len(v) for v in exp_mem.values())
     return (f"{len(parse_expect(src))} regs" + (f" + {n_mem} mem bytes" if n_mem else "")
             + f" ok, cycles={cycles}")
+
+
+# ---------------------------------------------------------------------------
+# Lockstep with Spike
+# ---------------------------------------------------------------------------
+SPIKE_LINE = re.compile(r"core\s+\d+:\s+\d+\s+0x([0-9a-f]+)\s+\(0x[0-9a-f]+\)(.*)")
+
+
+def spike_commits(elf, isa=SPIKE_ISA, timeout=60):
+    """Run Spike with --log-commits; return (reg_writes, stores) of the program
+    (pc >= MEM_BASE, i.e. after the boot ROM). reg_writes: [(rd, value)],
+    rd != 0; stores: [(addr, data)]. Spike's exit status is returned too."""
+    cmd = ["spike", f"--isa={isa}", f"-m{MEM_BASE:#x}:{MEM_BYTES:#x}",
+           "-l", "--log-commits", str(elf)]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise TestFailure(f"Spike did not exit within {timeout}s (a trap with no handler?): "
+                          + " ".join(cmd))
+    regs, stores = [], []
+    for line in (p.stdout + p.stderr).splitlines():
+        m = SPIKE_LINE.match(line)
+        if not m or int(m.group(1), 16) < MEM_BASE:
+            continue
+        tok = m.group(2).split()
+        i = 0
+        while i < len(tok):
+            t = tok[i]
+            if re.fullmatch(r"x\d+", t) and i + 1 < len(tok):
+                rd, val = int(t[1:]), int(tok[i + 1], 16)
+                if rd != 0:
+                    regs.append((rd, val))
+                i += 2
+            elif t == "mem" and i + 1 < len(tok):
+                addr = int(tok[i + 1], 16)
+                if i + 2 < len(tok) and tok[i + 2].startswith("0x"):   # store: addr data
+                    stores.append((addr, int(tok[i + 2], 16)))
+                    i += 3
+                else:                                                  # load: addr only
+                    i += 2
+            else:
+                i += 1
+    return regs, stores, p.returncode
+
+
+def core_commits(path):
+    regs, stores = [], []
+    for line in pathlib.Path(path).read_text().splitlines():
+        f = line.split()
+        if f[0] == "mem":
+            stores.append((int(f[1], 16), int(f[2], 16)))
+        else:
+            regs.append((int(f[0][1:]), int(f[1], 16)))
+    return regs, stores
+
+
+def first_diff(a, b, fmt):
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return f"  #{i}: core {fmt(x)}   spike {fmt(y)}"
+    return f"  lengths differ: core {len(a)}, spike {len(b)}"
+
+
+def lockstep(src, max_cycles=20000, expect_done=True, asm_defines=None, tag="", isa=SPIKE_ISA):
+    """Same ELF on the core and on Spike; compare every register write (order
+    and value) and every store. Returns (core reg writes, cycles, detail)."""
+    src = pathlib.Path(src)
+    log = BUILD / "prog" / (src.stem + tag + ".commits")
+    _, cycles, out, _ = run_program(src, max_cycles=max_cycles, expect_done=expect_done,
+                                    extra=[f"COMMITLOG={log}"], asm_defines=asm_defines, tag=tag)
+    c_regs, c_st = core_commits(log)
+    s_regs, s_st, _ = spike_commits(BUILD / "prog" / (src.stem + tag + ".elf"), isa=isa)
+    errs = []
+    if c_regs != s_regs:
+        errs.append("register writes differ:\n" +
+                    first_diff(c_regs, s_regs, lambda w: f"x{w[0]} = {w[1]:#018x}"))
+    if c_st != s_st:
+        errs.append("stores differ:\n" +
+                    first_diff(c_st, s_st, lambda w: f"[{w[0]:#x}] = {w[1]:#018x}"))
+    if errs:
+        raise TestFailure(f"{src.name}: lockstep mismatch vs Spike\n" + "\n".join(errs))
+    if not c_regs:
+        raise TestFailure(f"{src.name}: no register writes logged")
+    return c_regs, cycles, (f"{len(c_regs)} reg writes + {len(c_st)} stores identical "
+                            f"to Spike, cycles={cycles}")
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +390,161 @@ def test_zkne_directed():
 @test("zkne: aes64ks1i rnum 0xB..0xF raises illegal_instr, writes nothing")
 def test_ks1i_reserved():
     return check_illegal(ROOT / "tests/zkne/ks1i_reserved.S")
+
+
+@test("golden model self-test (FIPS-197 S-box, C.1 two ways, A.1 key schedule)")
+def test_golden_selftest():
+    return golden.selftest()
+
+
+# zkne_unit op encoding (its port definition)
+UNIT_OPS = {"aes64es": 0, "aes64esm": 1, "aes64ks1i": 2, "aes64ks2": 3}
+N_RANDOM = int(os.environ.get("ZKNE_N", "10000"))
+SEED = int(os.environ.get("ZKNE_SEED", "20261003"))
+
+
+def edge_values():
+    v = [0, golden.MASK64, 0x5555555555555555, 0xAAAAAAAAAAAAAAAA,
+         0x0123456789ABCDEF, 0xFEDCBA9876543210, 0x8000000000000000, 1]
+    v += [1 << i for i in range(64)]                       # walking one
+    v += [golden.MASK64 ^ (1 << i) for i in range(64)]     # walking zero
+    v += [0xFF << (8 * i) for i in range(8)]               # one byte set
+    return v
+
+
+@test(f"zkne_unit: edge cases + {N_RANDOM} random operands per instruction vs golden model")
+def test_zkne_unit_random():
+    rng = random.Random(SEED)
+    vecs = []                                   # (valid, name, rs1, rs2, rnum)
+    edges = edge_values()
+    for name in UNIT_OPS:
+        for a in edges:
+            for b in (edges[0], edges[1], edges[4], a):
+                for rnum in (range(11) if name == "aes64ks1i" else [0]):
+                    vecs.append((1, name, a, b, rnum))
+        for _ in range(N_RANDOM):
+            vecs.append((1, name, rng.getrandbits(64), rng.getrandbits(64),
+                         rng.randrange(11) if name == "aes64ks1i" else rng.randrange(16)))
+    for _ in range(200):                        # operand isolation: valid=0 -> 0
+        vecs.append((0, rng.choice(list(UNIT_OPS)), rng.getrandbits(64),
+                     rng.getrandbits(64), rng.randrange(11)))
+
+    d = BUILD / "zkne_unit"
+    d.mkdir(parents=True, exist_ok=True)
+    vec_file, out_file, vvp = d / "vectors.txt", d / "results.txt", d / "tb.vvp"
+    vec_file.write_text("".join(f"{v:x} {UNIT_OPS[n]:x} {a:016x} {b:016x} {r:x}\n"
+                                for v, n, a, b, r in vecs))
+    sh(["iverilog", "-g2005", "-s", "zkne_unit_tb", "-o", str(vvp),
+        str(ROOT / "rtl/zkne_unit.v"), str(ROOT / "rtl/aes_sbox.v"),
+        str(ROOT / "tb/zkne_unit_tb.v")])
+    out = sh(["vvp", "-n", str(vvp), f"+VEC={vec_file}", f"+OUT={out_file}"])
+    got = [int(x, 16) for x in out_file.read_text().split()]
+    if len(got) != len(vecs):
+        raise TestFailure(f"{len(got)} results for {len(vecs)} vectors\n{out}")
+    fails, per_op = [], {}
+    for (v, n, a, b, r), g in zip(vecs, got):
+        exp = golden.OPS[n](a, b, r) if v else 0
+        if v:
+            per_op[n] = per_op.get(n, 0) + 1
+        if g != exp:
+            fails.append(f"  valid={v} {n} rs1={a:016x} rs2={b:016x} rnum={r:x}: "
+                         f"rtl={g:016x} golden={exp:016x}")
+    if fails:
+        raise TestFailure(f"{len(fails)} mismatches (seed {SEED}), first 10:\n"
+                          + "\n".join(fails[:10]))
+    return (", ".join(f"{n} {c}" for n, c in per_op.items())
+            + f", valid=0 200; seed {SEED}")
+
+
+@test("zkne: FIPS-197 C.1 AES-128 in assembly (ks1i/ks2 key expansion) + lockstep")
+def test_fips197_c1():
+    src = ROOT / "tests/zkne/fips197_c1.S"
+    return check_expect(src) + "; " + lockstep(src)[2]
+
+
+@test("zkne: Zkt - FIPS program cycle count independent of key/plaintext (4 data sets)")
+def test_zkt_constant_time():
+    src = ROOT / "tests/zkne/fips197_c1.S"
+    rng = random.Random(SEED)
+    cycles = set()
+    for i in range(4):
+        key = bytes(rng.getrandbits(8) for _ in range(16)) if i else bytes(range(16))
+        pt = (bytes(rng.getrandbits(8) for _ in range(16)) if i
+              else bytes.fromhex("00112233445566778899aabbccddeeff"))
+        fmt = lambda b: ",".join(f"0x{x:02x}" for x in b)
+        regs, cyc, _, _ = run_program(src, asm_defines={"KEY_BYTES": fmt(key), "PT_BYTES": fmt(pt)},
+                                      tag=f"_zkt{i}")
+        ct = bytes(golden.aes128_encrypt(key, pt))
+        got = golden.u64_to_bytes(regs[2]) + golden.u64_to_bytes(regs[3])
+        if bytes(got) != ct:
+            raise TestFailure(f"data set {i}: ciphertext {bytes(got).hex()} != golden {ct.hex()}")
+        cycles.add(cyc)
+    if len(cycles) != 1:
+        raise TestFailure(f"cycle counts differ between data sets: {sorted(cycles)}")
+    return f"4 key/plaintext sets, all {cycles.pop()} cycles, ciphertexts match golden AES-128"
+
+
+@test("pipeline: forwarding into both Zkne operands (golden EXPECT + lockstep)")
+def test_pipe_fwd():
+    src = ROOT / "tests/pipeline/fwd_operands.S"
+    return check_expect(src) + "; " + lockstep(src)[2]
+
+
+@test("pipeline: load-use into aes64esm/es/ks1i/ks2 (golden EXPECT + lockstep)")
+def test_pipe_load_use():
+    src = ROOT / "tests/pipeline/load_use.S"
+    return check_expect(src) + "; " + lockstep(src)[2]
+
+
+@test("pipeline: mispredicted branches squash Zkne instructions (golden EXPECT + lockstep)")
+def test_pipe_squash():
+    src = ROOT / "tests/pipeline/squash.S"
+    return check_expect(src) + "; " + lockstep(src)[2]
+
+
+N_RANDOM_PROG = int(os.environ.get("ZKNE_PROG_N", "3000"))
+
+
+@test(f"random program: {N_RANDOM_PROG} random Zkne/xor/ld instructions, core vs golden vs Spike")
+def test_random_program():
+    d = BUILD / "random"
+    d.mkdir(parents=True, exist_ok=True)
+    src = d / "random_prog.S"
+    sh([sys.executable, str(ROOT / "scripts/gen_random_prog.py"), str(src), str(SEED),
+        str(N_RANDOM_PROG)])
+    exp = json.loads(src.with_suffix(".expect.json").read_text())
+    c_regs, cycles, detail = lockstep(src, max_cycles=20 * N_RANDOM_PROG)
+    # core log = la x1 (2 writes) + body + TEST_END (la x30: 2, addi x29: 1)
+    body = [list(w) for w in c_regs[2:-3]]
+    if body != exp["writes"]:
+        raise TestFailure("core register writes differ from the golden model:\n"
+                          + first_diff(body, exp["writes"], lambda w: f"x{w[0]} = {w[1]:#018x}"))
+    counts = ", ".join(f"{k} {v}" for k, v in sorted(exp["counts"].items()))
+    return f"{counts}; {len(body)} writes match golden; {detail}"
+
+
+# Every test program that Spike can run (no illegal instructions, no
+# custom-0). endian.S does misaligned ld/sd on purpose: Spike needs Zicclsm
+# for that (the core supports misaligned accesses within memory).
+LOCKSTEP_PROGRAMS = [
+    ("tests/isa/xor.S", {}),
+    ("tests/isa/lui_auipc.S", {}),
+    ("tests/isa/endian.S", {"isa": SPIKE_ISA + "_zicclsm"}),
+    ("tests/isa/branch.S", {}),
+    ("tests/isa/tohost_pass.S", {}),
+    ("tests/isa/tohost_fail.S", {"expect_done": False}),
+    ("tests/zkne/zkne_directed.S", {}),
+]
+
+
+def _make_lockstep_test(path, kw):
+    @test(f"lockstep vs Spike: {path}")
+    def _t():
+        return lockstep(ROOT / path, **kw)[2]
+
+
+for _path, _kw in LOCKSTEP_PROGRAMS:
+    _make_lockstep_test(_path, _kw)
 
 
 # ---------------------------------------------------------------------------

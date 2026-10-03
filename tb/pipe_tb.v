@@ -16,6 +16,10 @@
 //   +VCD=<file>       dump all signals to a VCD file
 //   +ALLOW_ILLEGAL    report illegal instructions but keep running
 //                     (default: the first one ends the run with ILLEGAL)
+//   +COMMITLOG=<file> log every architectural register write (at WB,
+//                     rd != 0) as "x<n> <value>" and every store (at
+//                     MEM) as "mem <addr> <data>", in program order, for
+//                     the lockstep comparison with Spike
 //   +DUMP_DMEM=<file> at the end, write data memory with $writememh
 //                     (one byte per line, byte 0 = lowest address)
 //
@@ -43,6 +47,8 @@ reg [8*256-1:0] out_file;
 reg [8*256-1:0] vcd_file;
 reg [8*256-1:0] dmem_dump_file;
 reg [63:0] tohost_addr;
+reg [8*256-1:0] commit_file;
+integer commit_fd;
 reg use_tohost;
 reg tohost_seen;
 reg [63:0] tohost_value;
@@ -87,6 +93,9 @@ initial begin
         out_file = "register_file.txt";
     zero_word_stop = $test$plusargs("ZERO_WORD_STOP");
     use_tohost = $value$plusargs("TOHOST=%h", tohost_addr);
+    commit_fd = 0;
+    if ($value$plusargs("COMMITLOG=%s", commit_file))
+        commit_fd = $fopen(commit_file, "w");
     if ($value$plusargs("VCD=%s", vcd_file)) begin
         $dumpfile(vcd_file);
         $dumpvars(0, pipe_tb);
@@ -101,6 +110,19 @@ always @(posedge clk) begin
         cycle_count <= 0;
     else
         cycle_count <= cycle_count + 1;
+end
+
+//////////////////////
+// COMMIT LOG: sampled at the clock edge that commits the write. WB is in
+// program order; squashed instructions never reach WB or MEM.
+//////////////////////
+always @(posedge clk) begin
+    if (!reset && commit_fd != 0) begin
+        if (uut.MEM_WB_RegWrite && uut.MEM_WB_rd != 5'd0)
+            $fdisplay(commit_fd, "x%0d %016h", uut.MEM_WB_rd, uut.write_data);
+        if (uut.EX_MEM_MemWrite)
+            $fdisplay(commit_fd, "mem %016h %016h", uut.EX_MEM_alu, uut.EX_MEM_write_data);
+    end
 end
 
 //////////////////////
@@ -193,6 +215,8 @@ task finish_run;
             $fdisplay(f, "%016h", uut.RF.registers[j]);
         $fdisplay(f, "%0d", cycle_count);
         $fclose(f);
+        if (commit_fd != 0)
+            $fclose(commit_fd);
         if ($value$plusargs("DUMP_DMEM=%s", dmem_dump_file))
             $writememh(dmem_dump_file, uut.DM.mem);
         $display("RESULT: %0s (cycles=%0d)", status, cycle_count);

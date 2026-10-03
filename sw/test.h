@@ -5,7 +5,8 @@
 // same address (+TOHOST=, taken from the ELF symbol). After the store
 // the program spins on a beq, which writes no register.
 //
-// TEST_END / TEST_FAIL clobber x29 (t4) and x30 (t5).
+// TEST_END / TEST_FAIL clobber x29 (t4) and x30 (t5), and use the local
+// label 99 for the spin loop (tests must not use 99f/99b).
 #ifndef TEST_H
 #define TEST_H
 
@@ -13,7 +14,7 @@
         la   x30, tohost;           \
         addi x29, x0, (value);      \
         sd   x29, 0(x30);           \
-1:      beq  x0, x0, 1b
+99:     beq  x0, x0, 99b
 
 #define TEST_END        TEST_EXIT(1)
 #define TEST_FAIL(code) TEST_EXIT(((code) << 1) | 1)
