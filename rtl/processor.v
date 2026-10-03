@@ -295,7 +295,6 @@ wire [63:0] mem_read_data;
 
 data_mem #(.BYTES(DMEM_BYTES)) DM(
     .clk(clk),
-    .reset(reset),
     .address(EX_MEM_alu),
     .write_data(EX_MEM_write_data),
     .MemRead(EX_MEM_MemRead),

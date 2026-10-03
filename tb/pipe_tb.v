@@ -11,6 +11,8 @@
 //   +ZERO_WORD_STOP   legacy end-of-program rule: stop when the fetched
 //                     instruction word is 0x00000000 (legacy test only)
 //   +VCD=<file>       dump all signals to a VCD file
+//   +DUMP_DMEM=<file> at the end, write data memory with $writememh
+//                     (one byte per line, byte 0 = lowest address)
 //
 // Parameters (set with iverilog -P pipe_tb.<name>=<value>):
 //   RESET_PC          reset vector, default 0x80000000 (legacy test: 0)
@@ -31,6 +33,7 @@ reg zero_word_stop;
 reg draining;
 reg [8*256-1:0] out_file;
 reg [8*256-1:0] vcd_file;
+reg [8*256-1:0] dmem_dump_file;
 
 processor #(.RESET_PC(RESET_PC)) uut(
     .clk(clk),
@@ -115,6 +118,8 @@ task finish_run;
             $fdisplay(f, "%016h", uut.RF.registers[j]);
         $fdisplay(f, "%0d", cycle_count);
         $fclose(f);
+        if ($value$plusargs("DUMP_DMEM=%s", dmem_dump_file))
+            $writememh(dmem_dump_file, uut.DM.mem);
         $display("RESULT: %0s (cycles=%0d)", status, cycle_count);
         $finish;
     end

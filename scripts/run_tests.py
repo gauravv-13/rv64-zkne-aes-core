@@ -77,22 +77,17 @@ def assemble(src):
     return out
 
 
-def make_image(elf):
-    """ELF -> instruction_mem image (one hex byte per line).
+MEM_BASE = 0x80000000   # address of byte 0 of both memories (sw/link.ld)
+MEM_BYTES = 65536
 
-    TEMPORARY: instruction_mem is still big-endian (byte at the lowest
-    address = instruction bits [31:24]), so each 32-bit word is written
-    most-significant byte first. Removed when the core goes little-endian.
-    """
-    binf = elf.with_suffix(".bin")
-    sh([CROSS + "objcopy", "-O", "binary", str(elf), str(binf)])
-    data = binf.read_bytes()
-    data += b"\0" * (-len(data) % 4)
-    lines = []
-    for i in range(0, len(data), 4):
-        lines += [f"{b:02x}" for b in reversed(data[i:i + 4])]
+
+def make_image(elf):
+    """ELF -> $readmemh image: objcopy -O verilog, one byte per entry, with
+    @offsets relative to MEM_BASE. Bytes stay in ELF (little-endian) order;
+    the same image is loaded into instruction_mem and data_mem."""
     hexf = elf.with_suffix(".hex")
-    hexf.write_text("\n".join(lines) + "\n")
+    sh([CROSS + "objcopy", "-O", "verilog", f"--change-addresses=-{MEM_BASE:#x}",
+        str(elf), str(hexf)])
     return hexf
 
 
@@ -107,25 +102,54 @@ def parse_expect(src):
     return exp
 
 
-def run_program(src, max_cycles=2000, defines=()):
-    """Assemble, simulate and return (registers[32], cycles, stdout)."""
+def parse_expect_mem(src):
+    """'// EXPECT_MEM: 0x80008000 = ef cd ab ...' lines -> {address: [bytes]}."""
+    exp = {}
+    for m in re.finditer(r"EXPECT_MEM:\s*(0x[0-9a-fA-F_]+)\s*=\s*((?:[0-9a-fA-F]{2}\s*)+)",
+                         pathlib.Path(src).read_text()):
+        exp[int(m.group(1).replace("_", ""), 16)] = [int(b, 16) for b in m.group(2).split()]
+    return exp
+
+
+def run_program(src, max_cycles=2000, defines=(), dump_dmem=False):
+    """Assemble, simulate and return (registers[32], cycles, stdout, dmem bytes or None)."""
     elf = assemble(src)
     img = make_image(elf)
     regs_file = elf.with_suffix(".regs")
     regs_file.unlink(missing_ok=True)
-    out = run_sim(build_sim(defines), [f"IMEM={img}", f"OUT={regs_file}",
-                                       f"MAX_CYCLES={max_cycles}", "ZERO_WORD_STOP"])
+    plusargs = [f"IMEM={img}", f"DMEM={img}", f"OUT={regs_file}",
+                f"MAX_CYCLES={max_cycles}", "ZERO_WORD_STOP"]
+    dmem_file = elf.with_suffix(".dmem")
+    if dump_dmem:
+        plusargs.append(f"DUMP_DMEM={dmem_file}")
+    out = run_sim(build_sim(defines), plusargs)
     vals = regs_file.read_text().split()
-    return [int(v, 16) for v in vals[:32]], int(vals[32]), out
+    dmem = None
+    if dump_dmem:
+        # $writememh output: one byte per line plus "// 0x<addr>" comment lines.
+        dmem = [int(line, 16) for line in dmem_file.read_text().splitlines()
+                if line.strip() and not line.lstrip().startswith("//")]
+        if len(dmem) != MEM_BYTES:
+            raise TestFailure(f"data memory dump has {len(dmem)} bytes, expected {MEM_BYTES}")
+    return [int(v, 16) for v in vals[:32]], int(vals[32]), out, dmem
 
 
 def check_expect(src, **kw):
-    regs, cycles, _ = run_program(src, **kw)
+    exp_mem = parse_expect_mem(src)
+    regs, cycles, _, dmem = run_program(src, dump_dmem=bool(exp_mem), **kw)
     bad = [f"  x{r}: got 0x{regs[r]:016x} expected 0x{v:016x}"
            for r, v in sorted(parse_expect(src).items()) if regs[r] != v]
+    for addr, want in sorted(exp_mem.items()):
+        off = addr - MEM_BASE
+        got = dmem[off:off + len(want)]
+        if got != want:
+            bad.append(f"  mem[{addr:#x}..]: got {' '.join(f'{b:02x}' for b in got)}"
+                       f" expected {' '.join(f'{b:02x}' for b in want)}")
     if bad:
-        raise TestFailure(f"{src}: register mismatch\n" + "\n".join(bad))
-    return f"{len(parse_expect(src))} regs ok, cycles={cycles}"
+        raise TestFailure(f"{src}: mismatch\n" + "\n".join(bad))
+    n_mem = sum(len(v) for v in exp_mem.values())
+    return (f"{len(parse_expect(src))} regs" + (f" + {n_mem} mem bytes" if n_mem else "")
+            + f" ok, cycles={cycles}")
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +193,11 @@ def test_xor():
 @test("isa B: lui/auipc/la at RESET_PC=0x80000000, low-bit memory decode")
 def test_lui_auipc():
     return check_expect(ROOT / "tests/isa/lui_auipc.S")
+
+
+@test("isa C: little-endian ld/sd, byte order in memory, data image load")
+def test_endian():
+    return check_expect(ROOT / "tests/isa/endian.S")
 
 
 # ---------------------------------------------------------------------------
