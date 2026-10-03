@@ -1,0 +1,11 @@
+# Build outputs
+build/
+sim
+a.out
+*.vvp
+*.vcd
+obj_dir/
+__pycache__/
+*.pyc
+# macOS
+.DS_Store
