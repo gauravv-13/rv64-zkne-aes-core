@@ -21,6 +21,7 @@ always @(*) begin
                 end
                 3'b111: ALUControl = 4'b0000;
                 3'b110: ALUControl = 4'b0001;
+                3'b100: ALUControl = 4'b0011;   // xor
                 default: ALUControl = 4'b0000;
             endcase
         end

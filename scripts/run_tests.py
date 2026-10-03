@@ -8,6 +8,7 @@ The process exits non-zero if any test fails.
 """
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 import traceback
@@ -16,6 +17,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 RTL_FILELIST = ROOT / "rtl" / "files.f"
 TB = ROOT / "tb" / "pipe_tb.v"
+SW = ROOT / "sw"
+CROSS = "riscv64-unknown-elf-"
+MARCH = "rv64i_zkne"
 
 
 class TestFailure(Exception):
@@ -56,6 +60,68 @@ def run_sim(vvp, plusargs):
     return out
 
 
+def assemble(src):
+    """Assemble + link a test program; returns the ELF path."""
+    src = pathlib.Path(src)
+    out = BUILD / "prog" / (src.stem + ".elf")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sh([CROSS + "gcc", f"-march={MARCH}", "-mabi=lp64", "-nostdlib", "-nostartfiles",
+        "-Wl,--no-warn-rwx-segments", f"-I{SW}", "-T", str(SW / "link.ld"),
+        str(src), "-o", str(out)])
+    return out
+
+
+def make_image(elf):
+    """ELF -> instruction_mem image (one hex byte per line).
+
+    TEMPORARY: instruction_mem is still big-endian (byte at the lowest
+    address = instruction bits [31:24]), so each 32-bit word is written
+    most-significant byte first. Removed when the core goes little-endian.
+    """
+    binf = elf.with_suffix(".bin")
+    sh([CROSS + "objcopy", "-O", "binary", str(elf), str(binf)])
+    data = binf.read_bytes()
+    data += b"\0" * (-len(data) % 4)
+    lines = []
+    for i in range(0, len(data), 4):
+        lines += [f"{b:02x}" for b in reversed(data[i:i + 4])]
+    hexf = elf.with_suffix(".hex")
+    hexf.write_text("\n".join(lines) + "\n")
+    return hexf
+
+
+def parse_expect(src):
+    """'// EXPECT: x5 = 0x...' lines -> {5: value}."""
+    exp = {}
+    for m in re.finditer(r"EXPECT:\s*x(\d+)\s*=\s*(0x[0-9a-fA-F_]+)",
+                         pathlib.Path(src).read_text()):
+        exp[int(m.group(1))] = int(m.group(2).replace("_", ""), 16)
+    if not exp:
+        raise TestFailure(f"{src}: no EXPECT lines")
+    return exp
+
+
+def run_program(src, max_cycles=2000, defines=()):
+    """Assemble, simulate and return (registers[32], cycles, stdout)."""
+    elf = assemble(src)
+    img = make_image(elf)
+    regs_file = elf.with_suffix(".regs")
+    regs_file.unlink(missing_ok=True)
+    out = run_sim(build_sim(defines), [f"IMEM={img}", f"OUT={regs_file}",
+                                       f"MAX_CYCLES={max_cycles}", "ZERO_WORD_STOP"])
+    vals = regs_file.read_text().split()
+    return [int(v, 16) for v in vals[:32]], int(vals[32]), out
+
+
+def check_expect(src, **kw):
+    regs, cycles, _ = run_program(src, **kw)
+    bad = [f"  x{r}: got 0x{regs[r]:016x} expected 0x{v:016x}"
+           for r, v in sorted(parse_expect(src).items()) if regs[r] != v]
+    if bad:
+        raise TestFailure(f"{src}: register mismatch\n" + "\n".join(bad))
+    return f"{len(parse_expect(src))} regs ok, cycles={cycles}"
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -86,6 +152,11 @@ def test_legacy():
         raise TestFailure("register dump differs from tests/legacy/expected_regs.txt:\n"
                           + "\n".join(diffs or ["  (different length)"]))
     return "32 regs + cycles=%s match" % got[-1]
+
+
+@test("isa A: xor (forwarding on both operands, x0)")
+def test_xor():
+    return check_expect(ROOT / "tests/isa/xor.S")
 
 
 # ---------------------------------------------------------------------------

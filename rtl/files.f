@@ -18,4 +18,5 @@ rtl/or64.v
 rtl/processor.v
 rtl/register_file.v
 rtl/sub64.v
+rtl/xor64.v
 rtl/pc.v
