@@ -1,6 +1,10 @@
 `timescale 1ns/1ps
 
-module processor(
+module processor #(
+    parameter [63:0] RESET_PC   = 64'h0000_0000_8000_0000,
+    parameter        IMEM_BYTES = 65536,
+    parameter        DMEM_BYTES = 65536
+) (
     input clk,
     input reset
 );
@@ -26,14 +30,14 @@ wire PCWrite;
 always @(posedge clk or posedge reset)
 begin
     if(reset)
-        PC <= 0;
+        PC <= RESET_PC;
     else if(PCWrite)
         PC <= PC_next;
 end
 
 wire [31:0] instruction;
 
-instruction_mem IM(
+instruction_mem #(.BYTES(IMEM_BYTES)) IM(
     .addr(PC),
     .instr(instruction)
 );
@@ -73,6 +77,7 @@ wire MemRead;
 wire MemWrite;
 wire MemtoReg;
 wire ALUSrc;
+wire [1:0] ALUSrcA;
 wire Branch;
 wire [1:0] ALUOp;
 
@@ -83,6 +88,7 @@ control CU(
     .MemWrite(MemWrite),
     .MemtoReg(MemtoReg),
     .ALUSrc(ALUSrc),
+    .ALUSrcA(ALUSrcA),
     .Branch(Branch),
     .ALUOp(ALUOp)
 );
@@ -140,6 +146,7 @@ wire ID_EX_RegWrite;
 wire ID_EX_MemWrite;
 wire ID_EX_MemtoReg;
 wire ID_EX_ALUSrc;
+wire [1:0] ID_EX_ALUSrcA;
 wire ID_EX_Branch;
 wire [1:0] ID_EX_ALUOp;
 
@@ -166,6 +173,7 @@ ID_EX idex(
     .MemWrite_in((stall | branch_taken) ? 1'b0 : MemWrite),
     .MemtoReg_in((stall | branch_taken) ? 1'b0 : MemtoReg),
     .ALUSrc_in((stall | branch_taken) ? 1'b0 : ALUSrc),
+    .ALUSrcA_in((stall | branch_taken) ? 2'b00 : ALUSrcA),
     .ALUOp_in((stall | branch_taken) ? 2'b00 : ALUOp),
     .Branch_in((stall | branch_taken) ? 1'b0 : Branch),
 
@@ -186,6 +194,7 @@ ID_EX idex(
     .MemWrite_out(ID_EX_MemWrite),
     .MemtoReg_out(ID_EX_MemtoReg),
     .ALUSrc_out(ID_EX_ALUSrc),
+    .ALUSrcA_out(ID_EX_ALUSrcA),
     .ALUOp_out(ID_EX_ALUOp),
     .Branch_out(ID_EX_Branch)
 );
@@ -204,11 +213,12 @@ ForwardingUnit FU(
     .ForwardB(ForwardB)
 );
 
+wire [63:0] alu_input1_forward;
 wire [63:0] alu_input1;
 wire [63:0] alu_input2_forward;
 wire [63:0] alu_input2;
 
-assign alu_input1 =
+assign alu_input1_forward =
     (ForwardA == 2'b10) ? EX_MEM_alu :
     (ForwardA == 2'b01) ? write_data :
                           ID_EX_rs1_data;
@@ -217,6 +227,12 @@ assign alu_input2_forward =
     (ForwardB == 2'b10) ? EX_MEM_alu :
     (ForwardB == 2'b01) ? write_data :
                           ID_EX_rs2_data;
+
+// Operand 1: rs1 (forwarded), PC (auipc) or zero (lui).
+assign alu_input1 =
+    (ID_EX_ALUSrcA == 2'b01) ? ID_EX_pc :
+    (ID_EX_ALUSrcA == 2'b10) ? 64'b0 :
+                               alu_input1_forward;
 
 assign alu_input2 =
         ID_EX_ALUSrc ? ID_EX_imm : alu_input2_forward;
@@ -277,7 +293,7 @@ EX_MEM exmem(
 
 wire [63:0] mem_read_data;
 
-data_mem DM(
+data_mem #(.BYTES(DMEM_BYTES)) DM(
     .clk(clk),
     .reset(reset),
     .address(EX_MEM_alu),

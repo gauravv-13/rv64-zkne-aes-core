@@ -12,11 +12,16 @@
 //                     instruction word is 0x00000000 (legacy test only)
 //   +VCD=<file>       dump all signals to a VCD file
 //
+// Parameters (set with iverilog -P pipe_tb.<name>=<value>):
+//   RESET_PC          reset vector, default 0x80000000 (legacy test: 0)
+//
 // The run ends with one of these lines (scripts/run_tests.py looks for them):
 //   "RESULT: DONE"     program finished normally
 //   "RESULT: TIMEOUT"  cycle limit reached
 // ---------------------------------------------------------------------------
-module pipe_tb;
+module pipe_tb #(
+    parameter [63:0] RESET_PC = 64'h0000_0000_8000_0000
+);
 
 reg clk;
 reg reset;
@@ -27,7 +32,7 @@ reg draining;
 reg [8*256-1:0] out_file;
 reg [8*256-1:0] vcd_file;
 
-processor uut(
+processor #(.RESET_PC(RESET_PC)) uut(
     .clk(clk),
     .reset(reset)
 );

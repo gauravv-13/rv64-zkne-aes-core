@@ -38,15 +38,21 @@ def sh(cmd, cwd=ROOT):
 _sim_cache = {}
 
 
-def build_sim(defines=()):
-    """Compile the core + testbench with Icarus; one binary per define set."""
-    key = tuple(sorted(defines))
+def build_sim(defines=(), params=None):
+    """Compile the core + testbench with Icarus; one binary per define/param set.
+
+    params: top-level testbench parameters, e.g. {"RESET_PC": "0"}.
+    """
+    params = params or {}
+    key = (tuple(sorted(defines)), tuple(sorted(params.items())))
     if key not in _sim_cache:
-        name = "sim" + "".join("_" + d.lower() for d in key) + ".vvp"
+        name = ("sim" + "".join("_" + d.lower() for d in key[0])
+                + "".join(f"_{k.lower()}{v}" for k, v in key[1]) + ".vvp")
         out = BUILD / name
         BUILD.mkdir(exist_ok=True)
         sh(["iverilog", "-g2005", "-s", "pipe_tb", "-o", str(out)]
-           + [f"-D{d}" for d in key]
+           + [f"-D{d}" for d in key[0]]
+           + [f"-Ppipe_tb.{k}={v}" for k, v in key[1]]
            + ["-c", str(RTL_FILELIST), str(TB)])
         _sim_cache[key] = out
     return _sim_cache[key]
@@ -137,7 +143,8 @@ def test(name):
 
 @test("legacy: original program gives the original 32 registers + 21 cycles")
 def test_legacy():
-    vvp = build_sim(defines=["LEGACY_AES"])
+    # The legacy program was written for a reset vector of 0.
+    vvp = build_sim(defines=["LEGACY_AES"], params={"RESET_PC": "0"})
     outdir = BUILD / "legacy"
     outdir.mkdir(parents=True, exist_ok=True)
     regs = outdir / "regs.txt"
@@ -157,6 +164,11 @@ def test_legacy():
 @test("isa A: xor (forwarding on both operands, x0)")
 def test_xor():
     return check_expect(ROOT / "tests/isa/xor.S")
+
+
+@test("isa B: lui/auipc/la at RESET_PC=0x80000000, low-bit memory decode")
+def test_lui_auipc():
+    return check_expect(ROOT / "tests/isa/lui_auipc.S")
 
 
 # ---------------------------------------------------------------------------

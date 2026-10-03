@@ -18,11 +18,11 @@ all: test
 # ---------------------------------------------------------------------------
 # make sim : run the legacy program and print the register dump
 # ---------------------------------------------------------------------------
-LEGACY_SIM := $(BUILD)/sim_legacy_aes.vvp
+LEGACY_SIM := $(BUILD)/sim_legacy_aes_reset_pc0.vvp
 
 $(LEGACY_SIM): $(RTL) $(TB) $(RTL_F)
 	@mkdir -p $(BUILD)
-	$(IVERILOG) -g2005 -s pipe_tb -DLEGACY_AES -o $@ -c $(RTL_F) $(TB)
+	$(IVERILOG) -g2005 -s pipe_tb -DLEGACY_AES -Ppipe_tb.RESET_PC=0 -o $@ -c $(RTL_F) $(TB)
 
 sim: $(LEGACY_SIM)
 	@mkdir -p $(BUILD)/legacy

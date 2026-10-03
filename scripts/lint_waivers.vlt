@@ -14,3 +14,8 @@ lint_off -rule PINCONNECTEMPTY -file "*rtl/processor.v" -match "*'Branch_out'*"
 // pc.v is an unused leftover module, kept so the file set matches the
 // original project.
 lint_off -rule DECLFILENAME -file "*rtl/pc.v"
+
+// The memories decode only the low address bits (see instruction_mem.v,
+// data_mem.v), so the upper address bits are intentionally unused.
+lint_off -rule UNUSEDSIGNAL -file "*rtl/instruction_mem.v" -match "*'addr'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/data_mem.v" -match "*'address'*"

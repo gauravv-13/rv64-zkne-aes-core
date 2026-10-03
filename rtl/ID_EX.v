@@ -23,6 +23,7 @@ module ID_EX (
     input MemWrite_in,
     input MemtoReg_in,
     input ALUSrc_in,
+    input [1:0] ALUSrcA_in,
     input [1:0] ALUOp_in,
     input Branch_in,
 
@@ -43,6 +44,7 @@ module ID_EX (
     output reg MemWrite_out,
     output reg MemtoReg_out,
     output reg ALUSrc_out,
+    output reg [1:0] ALUSrcA_out,
     output reg [1:0] ALUOp_out,
     output reg Branch_out
 );
@@ -67,6 +69,7 @@ begin
         MemWrite_out <= 0;
         MemtoReg_out <= 0;
         ALUSrc_out <= 0;
+        ALUSrcA_out <= 0;
         ALUOp_out <= 0;
         Branch_out <= 0;
     end
@@ -79,6 +82,7 @@ begin
         MemWrite_out <= 0;
         MemtoReg_out <= 0;
         ALUSrc_out <= 0;
+        ALUSrcA_out <= 0;
         ALUOp_out <= 0;
         Branch_out <= 0;
     end
@@ -100,6 +104,7 @@ begin
         MemWrite_out <= MemWrite_in;
         MemtoReg_out <= MemtoReg_in;
         ALUSrc_out <= ALUSrc_in;
+        ALUSrcA_out <= ALUSrcA_in;
         ALUOp_out <= ALUOp_in;
         Branch_out <= Branch_in;
     end
