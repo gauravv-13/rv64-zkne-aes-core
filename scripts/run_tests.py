@@ -523,6 +523,87 @@ def test_random_program():
     return f"{counts}; {len(body)} writes match golden; {detail}"
 
 
+@test("demo: sw/aes128_ctr.S, AES-128 CTR x4 vs NIST SP 800-38A F.5.1 + lockstep; cycles/block")
+def test_ctr_demo():
+    src = ROOT / "sw/aes128_ctr.S"
+    detail = check_expect(src)
+    _, cycles, out, _ = run_program(src, extra=["TRACE_STORES"])
+    ct = symbols(BUILD / "prog" / "aes128_ctr.elf", "ciphertext")["ciphertext"]
+    # cycle at which the second (last) store of each ciphertext block commits
+    done = [int(c) for c, a in re.findall(r"STORE cycle=(\d+) addr=([0-9a-f]+)", out)
+            if int(a, 16) in [ct + 16 * i + 8 for i in range(4)]]
+    if len(done) != 4:
+        raise TestFailure(f"expected 4 ciphertext block stores, saw {len(done)}:\n{out}")
+    per_block = [b - a for a, b in zip(done, done[1:])]
+    if len(set(per_block)) != 1:
+        raise TestFailure(f"blocks took different numbers of cycles: {per_block}")
+    return (f"{per_block[0]} cycles/block (steady state), first block done at cycle "
+            f"{done[0]} (incl. key expansion), total {cycles} cycles for 4 blocks; "
+            f"{detail}; " + lockstep(src)[2])
+
+
+def parse_vcd(path):
+    """Minimal VCD reader: returns (scopes, signal names, list of (time, {name: value}))
+    with the full value set at every timestamp. Names are '<scope path>.<signal>'."""
+    ids, scopes, stack = {}, set(), []
+    cur, frames, t = {}, [], None
+    in_defs = True
+    for line in pathlib.Path(path).read_text().splitlines():
+        tok = line.split()
+        if not tok:
+            continue
+        if in_defs:
+            if tok[0] == "$scope":
+                stack.append(tok[2])
+                scopes.add(".".join(stack))
+            elif tok[0] == "$upscope":
+                stack.pop()
+            elif tok[0] == "$var":
+                ids.setdefault(tok[3], []).append(".".join(stack + [tok[4]]))
+            elif tok[0] == "$enddefinitions":
+                in_defs = False
+            continue
+        if tok[0].startswith("#"):
+            if t is not None:
+                frames.append((t, dict(cur)))
+            t = int(tok[0][1:])
+        elif tok[0][0] in "bB":
+            for n in ids.get(tok[1], []):
+                cur[n] = tok[0][1:]
+        elif tok[0][0] in "01xzXZ" and len(tok) == 1:
+            for n in ids.get(tok[0][1:], []):
+                cur[n] = tok[0][0]
+    if t is not None:
+        frames.append((t, dict(cur)))
+    return scopes, {n for v in ids.values() for n in v}, frames
+
+
+@test("vcd: make vcd dumps only the Zkne unit; valid=0 -> S-box inputs, sr, result all 0")
+def test_vcd_zkne():
+    vcd = BUILD / "vcd" / "aes128_ctr_zkne.vcd"
+    vcd.unlink(missing_ok=True)
+    sh(["make", "-s", "vcd", "PROG=sw/aes128_ctr.S"])
+    scopes, names, frames = parse_vcd(vcd)
+    unit = "pipe_tb.uut.ZKNE_UNIT"
+    outside = sorted(n for n in names if not n.startswith(unit + "."))
+    if outside:
+        raise TestFailure(f"signals outside {unit} in the VCD: {outside[:5]}")
+    for net in ("valid", "sb_in", "sb_out", "sr", "mc", "result", "sbox[0].u_sbox.in"):
+        if f"{unit}.{net}" not in names:
+            raise TestFailure(f"{unit}.{net} missing from the VCD")
+    zero = lambda v: v is not None and set(v) <= {"0"}
+    idle = [f for f in frames if f[1].get(unit + ".valid") == "0"]
+    busy = [f for f in frames if f[1].get(unit + ".valid") == "1"]
+    for tm, vals in idle:
+        for net in ("sb_in", "sr", "result", "a", "b"):
+            if not zero(vals.get(f"{unit}.{net}")):
+                raise TestFailure(f"t={tm}: valid=0 but {net} = {vals.get(unit + '.' + net)}")
+    if not idle or not busy:
+        raise TestFailure("expected both valid=0 and valid=1 periods")
+    return (f"{len(names)} signals, all inside {unit}; {len(idle)} valid=0 timestamps with "
+            f"isolated (all-zero) operands, {len(busy)} valid=1")
+
+
 # Every test program that Spike can run (no illegal instructions, no
 # custom-0). endian.S does misaligned ld/sd on purpose: Spike needs Zicclsm
 # for that (the core supports misaligned accesses within memory).

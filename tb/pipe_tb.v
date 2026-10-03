@@ -14,12 +14,17 @@
 //   +ZERO_WORD_STOP   legacy end-of-program rule: stop when the fetched
 //                     instruction word is 0x00000000 (legacy test only)
 //   +VCD=<file>       dump all signals to a VCD file
+//   +VCD_ZKNE=<file>  dump only the Zkne unit (uut.ZKNE_UNIT and everything
+//                     below it: S-boxes, MixColumns nets) - for toggle-count
+//                     leakage analysis
 //   +ALLOW_ILLEGAL    report illegal instructions but keep running
 //                     (default: the first one ends the run with ILLEGAL)
 //   +COMMITLOG=<file> log every architectural register write (at WB,
 //                     rd != 0) as "x<n> <value>" and every store (at
 //                     MEM) as "mem <addr> <data>", in program order, for
 //                     the lockstep comparison with Spike
+//   +TRACE_STORES     print "STORE cycle=<n> addr=<a> data=<d>" for each
+//                     store (used to measure cycles per block)
 //   +DUMP_DMEM=<file> at the end, write data memory with $writememh
 //                     (one byte per line, byte 0 = lowest address)
 //
@@ -45,6 +50,7 @@ reg zero_word_stop;
 reg draining;
 reg [8*256-1:0] out_file;
 reg [8*256-1:0] vcd_file;
+reg [8*256-1:0] vcd_zkne_file;
 reg [8*256-1:0] dmem_dump_file;
 reg [63:0] tohost_addr;
 reg [8*256-1:0] commit_file;
@@ -100,6 +106,10 @@ initial begin
         $dumpfile(vcd_file);
         $dumpvars(0, pipe_tb);
     end
+    else if ($value$plusargs("VCD_ZKNE=%s", vcd_zkne_file)) begin
+        $dumpfile(vcd_zkne_file);
+        $dumpvars(0, pipe_tb.uut.ZKNE_UNIT);
+    end
 end
 
 //////////////////////
@@ -123,6 +133,12 @@ always @(posedge clk) begin
         if (uut.EX_MEM_MemWrite)
             $fdisplay(commit_fd, "mem %016h %016h", uut.EX_MEM_alu, uut.EX_MEM_write_data);
     end
+end
+
+always @(posedge clk) begin
+    if (!reset && uut.EX_MEM_MemWrite && $test$plusargs("TRACE_STORES"))
+        $display("STORE cycle=%0d addr=%016h data=%016h",
+                 cycle_count, uut.EX_MEM_alu, uut.EX_MEM_write_data);
 end
 
 //////////////////////

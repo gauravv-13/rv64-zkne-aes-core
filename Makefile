@@ -11,12 +11,13 @@ RTL_F     := rtl/files.f
 RTL       := $(shell cat $(RTL_F))
 TB        := tb/pipe_tb.v
 
-.PHONY: all sim test lint clean
+.PHONY: all sim vcd test lint clean
 
 all: test
 
 # ---------------------------------------------------------------------------
 # make sim : run the legacy program and print the register dump
+#            (make sim PROG=<file> runs another program, see below)
 # ---------------------------------------------------------------------------
 LEGACY_SIM := $(BUILD)/sim_legacy_aes_reset_pc0.vvp
 
@@ -24,6 +25,7 @@ $(LEGACY_SIM): $(RTL) $(TB) $(RTL_F)
 	@mkdir -p $(BUILD)
 	$(IVERILOG) -g2005 -s pipe_tb -DLEGACY_AES -Ppipe_tb.RESET_PC=0 -o $@ -c $(RTL_F) $(TB)
 
+ifeq ($(PROG),)
 sim: $(LEGACY_SIM)
 	@mkdir -p $(BUILD)/legacy
 	$(VVP) -n $(LEGACY_SIM) +IMEM=tests/legacy/program.hex \
@@ -31,6 +33,19 @@ sim: $(LEGACY_SIM)
 	    +VCD=$(BUILD)/legacy/pipeline.vcd
 	@echo "Register dump: $(BUILD)/legacy/regs.txt"
 	@cat $(BUILD)/legacy/regs.txt
+else
+# make sim PROG=<file.S|file.elf> : run a program, full VCD in build/vcd/
+sim:
+	$(PYTHON) scripts/sim_prog.py --vcd $(BUILD)/vcd/$(basename $(notdir $(PROG)))_full.vcd $(PROG)
+endif
+
+# ---------------------------------------------------------------------------
+# make vcd PROG=<file.S|file.elf> : VCD of the Zkne unit only (for toggle-count
+# leakage analysis) -> build/vcd/<name>_zkne.vcd
+# ---------------------------------------------------------------------------
+vcd:
+	@test -n "$(PROG)" || (echo "usage: make vcd PROG=<file.S|file.elf>"; exit 1)
+	$(PYTHON) scripts/sim_prog.py --vcd-zkne $(BUILD)/vcd/$(basename $(notdir $(PROG)))_zkne.vcd $(PROG)
 
 # ---------------------------------------------------------------------------
 # make test : run every test, print a pass/fail summary (K=<substring> filters)
