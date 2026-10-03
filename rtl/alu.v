@@ -14,7 +14,9 @@ module alu(input1, input2, control_signal, result, zero_flag);
     wire [63:0] y_and;
     wire [63:0] y_or;
     wire [63:0] y_xor;
+`ifdef LEGACY_AES
     wire [63:0] y_aes;
+`endif
 
     wire c_add;
     wire c_sub;
@@ -26,16 +28,20 @@ module alu(input1, input2, control_signal, result, zero_flag);
     wire z_and;
     wire z_or;
     wire z_xor;
+`ifdef LEGACY_AES
     wire z_aes;
+`endif
 
     add64 u0(input1, input2, y_add, c_add, o_add, z_add);
     sub64 u1(input1, input2, y_sub, c_sub, o_sub, z_sub);
     and64 u2(input1, input2, y_and, z_and);
     or64  u3(input1, input2, y_or, z_or);
     xor64 u5(input1, input2, y_xor, z_xor);
+`ifdef LEGACY_AES
     aes_round64 u4(.input1(input1), .input2(input2), .result(y_aes));
 
     assign z_aes = (y_aes == 64'b0);
+`endif
 
     assign result =
         (control_signal == 4'b0000) ? y_and :
@@ -43,7 +49,9 @@ module alu(input1, input2, control_signal, result, zero_flag);
         (control_signal == 4'b0011) ? y_xor :
         (control_signal == 4'b0010) ? y_add :
         (control_signal == 4'b0110) ? y_sub :
+`ifdef LEGACY_AES
         (control_signal == 4'b1000) ? y_aes :
+`endif
         64'b0;
 
     assign zero_flag =
@@ -52,7 +60,9 @@ module alu(input1, input2, control_signal, result, zero_flag);
         (control_signal == 4'b0011) ? z_xor :
         (control_signal == 4'b0010) ? z_add :
         (control_signal == 4'b0110) ? z_sub :
+`ifdef LEGACY_AES
         (control_signal == 4'b1000) ? z_aes :
+`endif
         1'b0;
 
 endmodule

@@ -86,11 +86,13 @@ wire [1:0] ALUSrcA;
 wire Branch;
 wire [1:0] ALUOp;
 wire illegal_instr;
+wire Zkne;
 
 control CU(
     .opcode(opcode),
     .funct3(funct3),
     .funct7(funct7),
+    .rs2_field(rs2),
     .RegWrite(RegWrite),
     .MemRead(MemRead),
     .MemWrite(MemWrite),
@@ -99,6 +101,7 @@ control CU(
     .ALUSrcA(ALUSrcA),
     .Branch(Branch),
     .ALUOp(ALUOp),
+    .Zkne(Zkne),
     .illegal_instr(illegal_instr)
 );
 
@@ -159,6 +162,7 @@ wire ID_EX_MemtoReg;
 wire ID_EX_ALUSrc;
 wire [1:0] ID_EX_ALUSrcA;
 wire ID_EX_Branch;
+wire ID_EX_Zkne;
 wire [1:0] ID_EX_ALUOp;
 
 ID_EX idex(
@@ -189,6 +193,7 @@ ID_EX idex(
     .ALUSrcA_in((stall | branch_taken) ? 2'b00 : ALUSrcA),
     .ALUOp_in((stall | branch_taken) ? 2'b00 : ALUOp),
     .Branch_in((stall | branch_taken) ? 1'b0 : Branch),
+    .Zkne_in((stall | branch_taken) ? 1'b0 : Zkne),
 
     .pc_out(ID_EX_pc),
     .rs1_data_out(ID_EX_rs1_data),
@@ -211,7 +216,8 @@ ID_EX idex(
     .ALUSrc_out(ID_EX_ALUSrc),
     .ALUSrcA_out(ID_EX_ALUSrcA),
     .ALUOp_out(ID_EX_ALUOp),
-    .Branch_out(ID_EX_Branch)
+    .Branch_out(ID_EX_Branch),
+    .Zkne_out(ID_EX_Zkne)
 );
 
 wire [1:0] ForwardA;
@@ -256,7 +262,7 @@ wire [3:0] ALUControl;
 
 alu_control ALUCTRL(
     .ALUOp(ID_EX_ALUOp),
-    .funct7(ID_EX_funct7),
+    .funct7(ID_EX_funct7[5]),
     .funct3(ID_EX_funct3),
     .ALUControl(ALUControl)
 );
@@ -271,6 +277,30 @@ alu ALU(
     .result(alu_result),
     .zero_flag(zero)
 );
+
+// ---------------------------------------------------------------------------
+// Zkne unit (EX). funct7 (instr[31:25]) identifies the instruction:
+//   0011001 aes64es, 0011011 aes64esm, 0011000 aes64ks1i, 0111111 aes64ks2
+// Operands are the forwarded rs1/rs2 values, as for the ALU.
+// ---------------------------------------------------------------------------
+wire [1:0]  zkne_op =
+    (ID_EX_funct7 == 7'b0011001) ? 2'b00 :      // ZKNE_ES
+    (ID_EX_funct7 == 7'b0011011) ? 2'b01 :      // ZKNE_ESM
+    (ID_EX_funct7 == 7'b0011000) ? 2'b10 :      // ZKNE_KS1I
+                                   2'b11;       // ZKNE_KS2 (0111111)
+wire [63:0] zkne_result;
+
+zkne_unit ZKNE_UNIT(
+    .valid(ID_EX_Zkne),
+    .op(zkne_op),
+    .rs1(alu_input1_forward),
+    .rs2(alu_input2_forward),
+    .rnum(ID_EX_rnum),
+    .result(zkne_result)
+);
+
+// EX result: Zkne unit or ALU
+wire [63:0] ex_result = ID_EX_Zkne ? zkne_result : alu_result;
 
 assign illegal_instr_ex = ID_EX_illegal;
 
@@ -288,7 +318,7 @@ EX_MEM exmem(
     .clk(clk),
     .reset(reset),
 
-    .alu_result_in(alu_result),
+    .alu_result_in(ex_result),
     .rs2_data_in(alu_input2_forward),
     .rd_in(ID_EX_rd),
 

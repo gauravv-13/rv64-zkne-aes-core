@@ -1,21 +1,27 @@
 `timescale 1ns/1ps
 
 // -----------------------------------------------------------------------
-// aes_round64
+// aes_round64  --  LEGACY, NON-STANDARD. Only compiled with -DLEGACY_AES,
+// for the legacy regression test (tests/legacy). Logic unchanged.
 //
-// Single-cycle, purely combinational 64-bit AES round.
+// This is the original custom-0 instruction (opcode 0001011). It is NOT
+// AES: it treats a 64-bit value as the whole AES state (the real state
+// is 128 bits), so its "ShiftRows" only permutes 8 bytes. Spike has no
+// such instruction. The standard Zkne instructions are in zkne_unit.v.
+//
+// Single-cycle, purely combinational.
 //   input1 = state      (rs1)
 //   input2 = round key  (rs2)
-//   result = scrambled cipher output (rd)
+//   result = rd
 //
-// Mirrors the Spike golden model exactly:
 //   Step A: SubBytes   - AES S-box applied to each of the 8 state bytes
-//   Step B: ShiftRows  - swap byte1<->byte5 and byte3<->byte7, then
+//   Step B: "ShiftRows" - swap byte1<->byte5 and byte3<->byte7, then
 //                         regroup into two 4-byte columns
 //   Step C: MixColumns - standard AES column-mix matrix, applied to
 //                         each of the two 32-bit columns independently
 //   Step D: AddRoundKey - XOR with the 64-bit round key
 // -----------------------------------------------------------------------
+`ifdef LEGACY_AES
 module aes_round64(
     input  [63:0] input1,
     input  [63:0] input2,
@@ -166,3 +172,4 @@ module aes_round64(
     assign result = mixed_state ^ input2;
 
 endmodule
+`endif // LEGACY_AES

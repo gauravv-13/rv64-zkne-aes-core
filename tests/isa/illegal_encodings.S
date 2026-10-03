@@ -61,6 +61,7 @@ _start:
         ILL(ebreak, ebreak)
         ILL(custom1, .insn r 0x2b, 0, 0, x0, x1, x1)
         ILL(custom0_f3_001, .insn r 0x0b, 1, 0, x0, x1, x1)
+        ILL(custom0_legacy_aes, .insn r 0x0b, 0, 0, x0, x1, x1)   // legal only with -DLEGACY_AES
         ILL(all_ones, .word 0xffffffff)
         addi x2, x0, 2              // legal
         ILL(all_zeros, .word 0x00000000)

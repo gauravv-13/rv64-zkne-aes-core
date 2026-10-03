@@ -229,12 +229,13 @@ def test_branch():
     return check_expect(ROOT / "tests/isa/branch.S")
 
 
-@test("isa D: every undecoded encoding raises illegal_instr (exactly once)")
-def test_illegal_encodings():
-    src = ROOT / "tests/isa/illegal_encodings.S"
+def check_illegal(src):
+    """Run with +ALLOW_ILLEGAL: exactly the ill_* labelled PCs must be reported
+    (once each), and the EXPECT registers must hold."""
+    src = pathlib.Path(src)
     detail = check_expect(src, extra=["ALLOW_ILLEGAL"])
     _, _, out, _ = run_program(src, extra=["ALLOW_ILLEGAL"])
-    want = symbols(BUILD / "prog" / "illegal_encodings.elf", "ill_")
+    want = symbols(BUILD / "prog" / (src.stem + ".elf"), "ill_")
     got = illegal_reports(out)
     by_pc = {a: n for n, a in want.items()}
     missing = sorted(n for n, a in want.items() if got.count(a) == 0)
@@ -244,6 +245,11 @@ def test_illegal_encodings():
         raise TestFailure(f"not reported: {missing}\nreported more than once: {dup}\n"
                           f"reported but legal: {extra}")
     return f"{len(want)} illegal encodings reported; {detail}"
+
+
+@test("isa D: every undecoded encoding raises illegal_instr (exactly once)")
+def test_illegal_encodings():
+    return check_illegal(ROOT / "tests/isa/illegal_encodings.S")
 
 
 @test("isa E: illegal instruction is a NOP (no reg/mem write, no branch)")
@@ -276,6 +282,16 @@ def test_tohost():
     if bad:
         raise TestFailure("register mismatch\n" + "\n".join(bad))
     return "TEST_FAIL(5) -> RESULT: FAIL (code 5); " + check_expect(ROOT / "tests/isa/tohost_pass.S")
+
+
+@test("zkne: directed FIPS-197 C.1 values (es, esm, ks1i incl. rnum=0xA, ks2)")
+def test_zkne_directed():
+    return check_expect(ROOT / "tests/zkne/zkne_directed.S")
+
+
+@test("zkne: aes64ks1i rnum 0xB..0xF raises illegal_instr, writes nothing")
+def test_ks1i_reserved():
+    return check_illegal(ROOT / "tests/zkne/ks1i_reserved.S")
 
 
 # ---------------------------------------------------------------------------

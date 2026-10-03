@@ -1,5 +1,6 @@
 rtl/add64.v
 rtl/aes_round64.v
+rtl/aes_sbox.v
 rtl/alu_control.v
 rtl/alu.v
 rtl/and64.v
@@ -19,4 +20,5 @@ rtl/processor.v
 rtl/register_file.v
 rtl/sub64.v
 rtl/xor64.v
+rtl/zkne_unit.v
 rtl/pc.v

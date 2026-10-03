@@ -28,6 +28,7 @@ module ID_EX (
     input [1:0] ALUSrcA_in,
     input [1:0] ALUOp_in,
     input Branch_in,
+    input Zkne_in,
 
     output reg [63:0] pc_out,
     output reg [63:0] rs1_data_out,
@@ -50,7 +51,8 @@ module ID_EX (
     output reg ALUSrc_out,
     output reg [1:0] ALUSrcA_out,
     output reg [1:0] ALUOp_out,
-    output reg Branch_out
+    output reg Branch_out,
+    output reg Zkne_out
 );
 
 always @(posedge clk or posedge reset)
@@ -78,6 +80,7 @@ begin
         ALUSrcA_out <= 0;
         ALUOp_out <= 0;
         Branch_out <= 0;
+        Zkne_out <= 0;
     end
     else if (stall) begin
         rs1_out <= 0;
@@ -92,6 +95,7 @@ begin
         ALUSrcA_out <= 0;
         ALUOp_out <= 0;
         Branch_out <= 0;
+        Zkne_out <= 0;
     end
     else begin
         pc_out <= pc_in;
@@ -116,6 +120,7 @@ begin
         ALUSrcA_out <= ALUSrcA_in;
         ALUOp_out <= ALUOp_in;
         Branch_out <= Branch_in;
+        Zkne_out <= Zkne_in;
     end
 end
 
