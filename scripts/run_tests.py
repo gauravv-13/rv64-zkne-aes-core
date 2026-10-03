@@ -111,6 +111,22 @@ def parse_expect_mem(src):
     return exp
 
 
+def symbols(elf, prefix):
+    """{name: address} for ELF symbols starting with prefix."""
+    syms = {}
+    for line in sh([CROSS + "nm", str(elf)]).splitlines():
+        addr, _, name = line.split()
+        if name.startswith(prefix):
+            syms[name] = int(addr, 16)
+    return syms
+
+
+def illegal_reports(stdout):
+    """PCs from the testbench's 'ILLEGAL INSTRUCTION 0x... at pc 0x...' lines."""
+    return [int(pc, 16) for pc in
+            re.findall(r"ILLEGAL INSTRUCTION 0x[0-9a-f]+ at pc 0x([0-9a-f]+)", stdout)]
+
+
 def run_program(src, max_cycles=2000, defines=(), dump_dmem=False, extra=(), expect_done=True):
     """Assemble, simulate and return (registers[32], cycles, stdout, dmem bytes or None).
 
@@ -120,8 +136,9 @@ def run_program(src, max_cycles=2000, defines=(), dump_dmem=False, extra=(), exp
     img = make_image(elf)
     regs_file = elf.with_suffix(".regs")
     regs_file.unlink(missing_ok=True)
+    tohost = symbols(elf, "tohost")["tohost"]
     plusargs = [f"IMEM={img}", f"DMEM={img}", f"OUT={regs_file}",
-                f"MAX_CYCLES={max_cycles}", "ZERO_WORD_STOP"]
+                f"MAX_CYCLES={max_cycles}", f"TOHOST={tohost:x}"]
     dmem_file = elf.with_suffix(".dmem")
     if dump_dmem:
         plusargs.append(f"DUMP_DMEM={dmem_file}")
@@ -207,22 +224,6 @@ def test_endian():
     return check_expect(ROOT / "tests/isa/endian.S")
 
 
-def symbols(elf, prefix):
-    """{name: address} for ELF symbols starting with prefix."""
-    syms = {}
-    for line in sh([CROSS + "nm", str(elf)]).splitlines():
-        addr, _, name = line.split()
-        if name.startswith(prefix):
-            syms[name] = int(addr, 16)
-    return syms
-
-
-def illegal_reports(stdout):
-    """PCs from the testbench's 'ILLEGAL INSTRUCTION 0x... at pc 0x...' lines."""
-    return [int(pc, 16) for pc in
-            re.findall(r"ILLEGAL INSTRUCTION 0x[0-9a-f]+ at pc 0x([0-9a-f]+)", stdout)]
-
-
 @test("isa D: beq/bne decode, taken/not-taken, squash, forwarding")
 def test_branch():
     return check_expect(ROOT / "tests/isa/branch.S")
@@ -262,6 +263,19 @@ def test_illegal_fails_run():
     if "ERROR: illegal instruction" not in out:
         raise TestFailure("no clear error message:\n" + out)
     return f"stopped at pc {first_ill:#x} with RESULT: ILLEGAL"
+
+
+@test("isa F: tohost exit; fail code; nothing after TEST_END commits")
+def test_tohost():
+    src = ROOT / "tests/isa/tohost_fail.S"
+    regs, _, out, _ = run_program(src, expect_done=False)
+    if "RESULT: FAIL" not in out or "(code 5)" not in out:
+        raise TestFailure("expected RESULT: FAIL with code 5:\n" + out)
+    bad = [f"  x{r}: got 0x{regs[r]:016x} expected 0x{v:016x}"
+           for r, v in sorted(parse_expect(src).items()) if regs[r] != v]
+    if bad:
+        raise TestFailure("register mismatch\n" + "\n".join(bad))
+    return "TEST_FAIL(5) -> RESULT: FAIL (code 5); " + check_expect(ROOT / "tests/isa/tohost_pass.S")
 
 
 # ---------------------------------------------------------------------------

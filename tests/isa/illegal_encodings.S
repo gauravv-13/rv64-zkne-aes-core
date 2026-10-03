@@ -63,6 +63,7 @@ _start:
         ILL(custom0_f3_001, .insn r 0x0b, 1, 0, x0, x1, x1)
         ILL(all_ones, .word 0xffffffff)
         addi x2, x0, 2              // legal
+        ILL(all_zeros, .word 0x00000000)
         addi x3, x0, 3              // legal
         TEST_END
 

@@ -8,6 +8,9 @@
 //   +OUT=<file>       register dump written at the end of the run
 //                     (32 lines of %016h, then the cycle count)
 //   +MAX_CYCLES=<n>   cycle limit, default 200; hitting it fails the run
+//   +TOHOST=<hex>     address of `tohost` (from the ELF). A store there
+//                     ends the run: 1 = pass, (code<<1)|1 = fail(code).
+//                     This is how all new tests end (same as Spike's HTIF).
 //   +ZERO_WORD_STOP   legacy end-of-program rule: stop when the fetched
 //                     instruction word is 0x00000000 (legacy test only)
 //   +VCD=<file>       dump all signals to a VCD file
@@ -20,7 +23,9 @@
 //   RESET_PC          reset vector, default 0x80000000 (legacy test: 0)
 //
 // The run ends with one of these lines (scripts/run_tests.py looks for them):
-//   "RESULT: DONE"     program finished normally
+//   "RESULT: DONE"     program finished normally (tohost = 1, or the
+//                      legacy zero word)
+//   "RESULT: FAIL"     program wrote a fail code to tohost
 //   "RESULT: TIMEOUT"  cycle limit reached
 //   "RESULT: ILLEGAL"  an illegal instruction reached EX (test fails)
 // ---------------------------------------------------------------------------
@@ -37,6 +42,10 @@ reg draining;
 reg [8*256-1:0] out_file;
 reg [8*256-1:0] vcd_file;
 reg [8*256-1:0] dmem_dump_file;
+reg [63:0] tohost_addr;
+reg use_tohost;
+reg tohost_seen;
+reg [63:0] tohost_value;
 
 wire illegal_instr_ex;
 integer illegal_count;
@@ -62,6 +71,7 @@ initial begin
     reset = 1;
     cycle_count = 0;
     draining = 0;
+    tohost_seen = 0;
     illegal_count = 0;
     #10;
     reset = 0;
@@ -76,6 +86,7 @@ initial begin
     if (!$value$plusargs("OUT=%s", out_file))
         out_file = "register_file.txt";
     zero_word_stop = $test$plusargs("ZERO_WORD_STOP");
+    use_tohost = $value$plusargs("TOHOST=%h", tohost_addr);
     if ($value$plusargs("VCD=%s", vcd_file)) begin
         $dumpfile(vcd_file);
         $dumpvars(0, pipe_tb);
@@ -104,6 +115,33 @@ initial begin
     @(posedge draining);
     repeat (4) @(posedge clk);   // allow pipeline to drain
     finish_run("DONE");
+end
+
+//////////////////////
+// PROGRAM FINISH (tohost): the store is seen in MEM at edge k; the older
+// instruction in WB writes the register file at that same edge. One extra
+// edge is waited as margin, so the dump does not depend on event ordering
+// within the time step (the only younger instruction is the spin-loop beq,
+// which writes nothing).
+//////////////////////
+always @(posedge clk) begin
+    if (!reset && use_tohost && !tohost_seen &&
+        uut.EX_MEM_MemWrite && uut.EX_MEM_alu == tohost_addr) begin
+        tohost_value <= uut.EX_MEM_write_data;
+        tohost_seen  <= 1'b1;
+    end
+end
+
+initial begin
+    @(posedge tohost_seen);
+    @(posedge clk);
+    if (tohost_value == 64'd1)
+        finish_run("DONE");
+    else begin
+        $display("ERROR: program reported failure, tohost = 0x%016h (code %0d)",
+                 tohost_value, tohost_value >> 1);
+        finish_run("FAIL");
+    end
 end
 
 //////////////////////
