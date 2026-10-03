@@ -8,6 +8,8 @@
 //   BRANCH  (1100011): beq, bne
 //   LUI     (0110111), AUIPC (0010111)
 //   custom-0 (0001011): legacy aes_round64 (funct3=000, funct7=0000000)
+// The core has no traps: an illegal instruction becomes a NOP (all control
+// signals cleared: no register write, no memory access, no branch).
 module control(
     input [6:0] opcode,
     input [2:0] funct3,
@@ -114,6 +116,17 @@ always @(*) begin
         end
 
     endcase
+
+    if (illegal_instr) begin
+        RegWrite = 0;
+        MemRead  = 0;
+        MemWrite = 0;
+        MemtoReg = 0;
+        ALUSrc   = 0;
+        ALUSrcA  = 2'b00;
+        Branch   = 0;
+        ALUOp    = 2'b00;
+    end
 end
 
 endmodule

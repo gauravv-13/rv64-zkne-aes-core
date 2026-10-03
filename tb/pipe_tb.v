@@ -11,6 +11,8 @@
 //   +ZERO_WORD_STOP   legacy end-of-program rule: stop when the fetched
 //                     instruction word is 0x00000000 (legacy test only)
 //   +VCD=<file>       dump all signals to a VCD file
+//   +ALLOW_ILLEGAL    report illegal instructions but keep running
+//                     (default: the first one ends the run with ILLEGAL)
 //   +DUMP_DMEM=<file> at the end, write data memory with $writememh
 //                     (one byte per line, byte 0 = lowest address)
 //
@@ -20,6 +22,7 @@
 // The run ends with one of these lines (scripts/run_tests.py looks for them):
 //   "RESULT: DONE"     program finished normally
 //   "RESULT: TIMEOUT"  cycle limit reached
+//   "RESULT: ILLEGAL"  an illegal instruction reached EX (test fails)
 // ---------------------------------------------------------------------------
 module pipe_tb #(
     parameter [63:0] RESET_PC = 64'h0000_0000_8000_0000
@@ -105,8 +108,9 @@ end
 
 //////////////////////
 // ILLEGAL INSTRUCTIONS: reported from EX, so squashed instructions never
-// count. In legacy mode (+ZERO_WORD_STOP) the zero word is the end marker
-// and is not reported.
+// count. The core turns them into NOPs (it has no traps); the testbench
+// fails the run on the first one unless +ALLOW_ILLEGAL. In legacy mode
+// (+ZERO_WORD_STOP) the zero word is the end marker and is not reported.
 //////////////////////
 function [31:0] imem_word;
     input [63:0] pc;
@@ -124,6 +128,10 @@ always @(posedge clk) begin
         $display("ILLEGAL INSTRUCTION 0x%08h at pc 0x%016h (cycle %0d)",
                  imem_word(uut.ID_EX_pc), uut.ID_EX_pc, cycle_count);
         illegal_count = illegal_count + 1;
+        if (!$test$plusargs("ALLOW_ILLEGAL")) begin
+            $display("ERROR: illegal instruction (executed as a NOP; the core has no traps). Failing the test.");
+            finish_run("ILLEGAL");
+        end
     end
 end
 

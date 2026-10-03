@@ -111,8 +111,11 @@ def parse_expect_mem(src):
     return exp
 
 
-def run_program(src, max_cycles=2000, defines=(), dump_dmem=False):
-    """Assemble, simulate and return (registers[32], cycles, stdout, dmem bytes or None)."""
+def run_program(src, max_cycles=2000, defines=(), dump_dmem=False, extra=(), expect_done=True):
+    """Assemble, simulate and return (registers[32], cycles, stdout, dmem bytes or None).
+
+    extra: additional plusargs. expect_done=False returns even if the run did
+    not end with RESULT: DONE (for tests that check a failing run)."""
     elf = assemble(src)
     img = make_image(elf)
     regs_file = elf.with_suffix(".regs")
@@ -122,7 +125,11 @@ def run_program(src, max_cycles=2000, defines=(), dump_dmem=False):
     dmem_file = elf.with_suffix(".dmem")
     if dump_dmem:
         plusargs.append(f"DUMP_DMEM={dmem_file}")
-    out = run_sim(build_sim(defines), plusargs)
+    plusargs += list(extra)
+    if expect_done:
+        out = run_sim(build_sim(defines), plusargs)
+    else:
+        out = sh(["vvp", "-n", str(build_sim(defines))] + [f"+{p}" for p in plusargs])
     vals = regs_file.read_text().split()
     dmem = None
     if dump_dmem:
@@ -224,8 +231,8 @@ def test_branch():
 @test("isa D: every undecoded encoding raises illegal_instr (exactly once)")
 def test_illegal_encodings():
     src = ROOT / "tests/isa/illegal_encodings.S"
-    detail = check_expect(src)
-    _, _, out, _ = run_program(src)
+    detail = check_expect(src, extra=["ALLOW_ILLEGAL"])
+    _, _, out, _ = run_program(src, extra=["ALLOW_ILLEGAL"])
     want = symbols(BUILD / "prog" / "illegal_encodings.elf", "ill_")
     got = illegal_reports(out)
     by_pc = {a: n for n, a in want.items()}
@@ -236,6 +243,25 @@ def test_illegal_encodings():
         raise TestFailure(f"not reported: {missing}\nreported more than once: {dup}\n"
                           f"reported but legal: {extra}")
     return f"{len(want)} illegal encodings reported; {detail}"
+
+
+@test("isa E: illegal instruction is a NOP (no reg/mem write, no branch)")
+def test_illegal_nop():
+    return check_expect(ROOT / "tests/isa/illegal_nop.S", extra=["ALLOW_ILLEGAL"])
+
+
+@test("isa E: by default the first illegal instruction fails the run")
+def test_illegal_fails_run():
+    src = ROOT / "tests/isa/illegal_nop.S"
+    regs, _, out, _ = run_program(src, expect_done=False)
+    first_ill = symbols(BUILD / "prog" / "illegal_nop.elf", "first_illegal")["first_illegal"]
+    if "RESULT: ILLEGAL" not in out or "RESULT: DONE" in out:
+        raise TestFailure("run did not end with RESULT: ILLEGAL:\n" + out)
+    if illegal_reports(out) != [first_ill]:
+        raise TestFailure(f"expected one report at {first_ill:#x}:\n" + out)
+    if "ERROR: illegal instruction" not in out:
+        raise TestFailure("no clear error message:\n" + out)
+    return f"stopped at pc {first_ill:#x} with RESULT: ILLEGAL"
 
 
 # ---------------------------------------------------------------------------
