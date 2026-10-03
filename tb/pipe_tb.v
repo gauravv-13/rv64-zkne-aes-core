@@ -39,7 +39,8 @@
 //   "RESULT: ILLEGAL"  an illegal instruction reached EX (test fails)
 // ---------------------------------------------------------------------------
 module pipe_tb #(
-    parameter [63:0] RESET_PC = 64'h0000_0000_8000_0000
+    parameter [63:0] RESET_PC = 64'h0000_0000_8000_0000,
+    parameter        ZKNE_ISOLATE = 1
 );
 
 reg clk;
@@ -62,7 +63,7 @@ reg [63:0] tohost_value;
 wire illegal_instr_ex;
 integer illegal_count;
 
-processor #(.RESET_PC(RESET_PC)) uut(
+processor #(.RESET_PC(RESET_PC), .ZKNE_ISOLATE(ZKNE_ISOLATE)) uut(
     .clk(clk),
     .reset(reset),
     .illegal_instr_ex(illegal_instr_ex)

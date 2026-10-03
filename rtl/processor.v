@@ -3,7 +3,8 @@
 module processor #(
     parameter [63:0] RESET_PC   = 64'h0000_0000_8000_0000,
     parameter        IMEM_BYTES = 65536,
-    parameter        DMEM_BYTES = 65536
+    parameter        DMEM_BYTES = 65536,
+    parameter        ZKNE_ISOLATE = 1   // zkne_unit operand isolation on/off
 ) (
     input clk,
     input reset,
@@ -290,7 +291,7 @@ wire [1:0]  zkne_op =
                                    2'b11;       // ZKNE_KS2 (0111111)
 wire [63:0] zkne_result;
 
-zkne_unit ZKNE_UNIT(
+zkne_unit #(.ISOLATE(ZKNE_ISOLATE)) ZKNE_UNIT(
     .valid(ID_EX_Zkne),
     .op(zkne_op),
     .rs1(alu_input1_forward),

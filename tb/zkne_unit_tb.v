@@ -8,7 +8,9 @@
 //   +VEC=<file>   one vector per line, hex: valid op rs1 rs2 rnum
 //   +OUT=<file>   one result per line (%016h), same order
 // ---------------------------------------------------------------------------
-module zkne_unit_tb;
+module zkne_unit_tb #(
+    parameter ISOLATE = 1
+);
 
 reg         valid;
 reg  [1:0]  op;
@@ -16,7 +18,7 @@ reg  [63:0] rs1, rs2;
 reg  [3:0]  rnum;
 wire [63:0] result;
 
-zkne_unit dut (
+zkne_unit #(.ISOLATE(ISOLATE)) dut (
     .valid(valid), .op(op), .rs1(rs1), .rs2(rs2), .rnum(rnum), .result(result)
 );
 

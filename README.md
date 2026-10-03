@@ -6,7 +6,7 @@ as a clean, easy-to-probe target for power side-channel research.**
 
 ![ISA](https://img.shields.io/badge/ISA-RV64%20%2B%20Zkne-blue)
 ![Spec](https://img.shields.io/badge/Scalar%20Crypto-v1.0.1-blue)
-![Tests](https://img.shields.io/badge/make%20test-28%2F28%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/make%20test-31%2F31%20passing-brightgreen)
 ![Spike](https://img.shields.io/badge/Spike%20lockstep-3442%20writes%20identical-brightgreen)
 ![Lint](https://img.shields.io/badge/verilator%20lint-clean-brightgreen)
 ![Endian](https://img.shields.io/badge/endianness-little--only-lightgrey)
@@ -63,8 +63,10 @@ heavily.
 - **Clean AES datapath:** `rtl/zkne_unit.v` plus a `case`-statement S-box in
   `rtl/aes_sbox.v`. There are no memories or `initial` blocks in the AES
   logic, so it synthesizes to plain logic and every net can be probed.
-- **Operand isolation:** the AES nets stay at zero unless an AES
-  instruction is in EX, so ordinary ALU instructions don't add toggle noise.
+- **Operand isolation, switchable:** by default the AES nets stay at zero
+  unless an AES instruction is in EX, so ordinary ALU instructions don't add
+  toggle noise. `ISOLATE=0` builds an ungated unit, like a crypto unit with
+  no isolation, so leakage can be measured both ways.
 - **Full forwarding:** both operands, including the back-to-back
   `aes64esm t2,t0,t1 ; aes64esm t3,t1,t0` pattern.
 - **Checked against Spike:** every register write and store of 13 programs
@@ -115,7 +117,7 @@ make test
 [PASS] demo: sw/aes128_ctr.S, AES-128 CTR x4 vs NIST SP 800-38A F.5.1 + lockstep; cycles/block
 ...
 ============================================================
-SUMMARY: 28/28 passed, 0 failed
+SUMMARY: 31/31 passed, 0 failed
 ============================================================
 ```
 
@@ -128,6 +130,7 @@ The whole suite takes about 15 seconds.
 | `make test` | Every test, with a pass/fail summary. `K=<substring>` runs a subset. |
 | `make sim PROG=sw/aes128_ctr.S` | Run one program (`.S` or ELF), print the registers, write a full VCD. |
 | `make vcd PROG=sw/aes128_ctr.S` | VCD of **only the Zkne unit**, saved as `build/vcd/<name>_zkne.vcd`. |
+| `make vcd PROG=... ISOLATE=0` | Same, with operand isolation off: `build/vcd/<name>_zkne_noiso.vcd`. `ISOLATE=0` also works with `make sim` and `make lint`. |
 | `make sim` | Run the original legacy program. |
 | `make lint` | `verilator --lint-only -Wall` (clean). |
 | `make clean` | Remove `build/`. |
@@ -270,7 +273,7 @@ Every step of the AES datapath has its own wire, so it shows up in the VCD:
 
 | Net | Meaning |
 |---|---|
-| `a`, `b`, `rn` | Isolated operands |
+| `a`, `b`, `rn` | Operands (isolated when `ISOLATE=1`) |
 | `sr` | ShiftRows output |
 | `sb_in`, `sb_out` | S-box layer input and output |
 | `sbox[i].u_sbox.in/out` | Each of the 8 S-boxes |
@@ -285,7 +288,24 @@ Every step of the AES datapath has its own wire, so it shows up in the VCD:
   implementation, replace that module.
 - **Operand isolation:** a test parses the VCD and checks that the operand,
   S-box and result nets are zero whenever no AES instruction is in EX.
-- **Not hardened:** the unit is unprotected AES. Operand isolation reduces
+- **Isolation on/off:** `zkne_unit` has a parameter `ISOLATE` (default 1),
+  set from the top as `ZKNE_ISOLATE` and by `make ... ISOLATE=0`. With 0, the
+  operands feed the datapath every cycle and the internal muxes select on
+  the instruction bits alone, so the AES nets follow ordinary ALU traffic.
+  Results are the same in both modes, and the test suite checks that
+  (unit vectors, FIPS-197, CTR, forwarding and the random program vs Spike).
+  An unprotected crypto unit in a larger core probably doesn't isolate
+  its operands, so measure both ways. On the CTR demo, the bit toggles on
+  `a/b/sr/sb_in/sb_out/mc/result` are:
+
+  | | Toggles while idle | Total toggles |
+  |---|---|---|
+  | `ISOLATE=1` | 0 | 31,918 |
+  | `ISOLATE=0` | 10,224 | 41,970 |
+
+  "Idle" means no AES instruction in EX in either of two consecutive VCD
+  frames. With isolation, the only toggles outside AES instructions are
+  the return to zero just after one.- **Not hardened:** the unit is unprotected AES. Operand isolation reduces
   noise but is not a countermeasure.
 
 ## Writing your own programs
@@ -337,6 +357,7 @@ tests/
 scripts/        run_tests.py (make test), zkne_golden.py, gen_random_prog.py,
                 gen_aes_sbox.py, sim_prog.py, lint_waivers.vlt, legacy_hex_to_le.py
 docs/ZKNE.md    full implementation notes, encodings, Spike results, limits
+LICENSE         MIT
 ```
 
 ## Known limits
@@ -372,9 +393,14 @@ commit each, so `git log` reads as a guide:
 | Step 3 | Zkne implementation |
 | Step 4 | Golden model, FIPS-197, random tests, Spike lockstep |
 | Step 5 | AES-128 CTR demo and the Zkne-unit VCD hook |
+| `v1.0` | Operand isolation switch (`ISOLATE`), MIT license. The fixed version for the paper |
 
 The original instruction is kept, unchanged, behind `-DLEGACY_AES`, and its
 regression test still passes.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
 
 ---
 

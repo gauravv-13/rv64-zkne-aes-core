@@ -11,6 +11,14 @@ RTL_F     := rtl/files.f
 RTL       := $(shell cat $(RTL_F))
 TB        := tb/pipe_tb.v
 
+# ISOLATE=0 builds the Zkne unit without operand isolation (make sim / vcd /
+# lint). VCDs then get a _noiso suffix, so both versions can sit side by side.
+ISOLATE   ?= 1
+ifeq ($(ISOLATE),0)
+NOISO_ARG := --no-isolate
+NOISO_SFX := _noiso
+endif
+
 .PHONY: all sim vcd test lint clean
 
 all: test
@@ -36,16 +44,18 @@ sim: $(LEGACY_SIM)
 else
 # make sim PROG=<file.S|file.elf> : run a program, full VCD in build/vcd/
 sim:
-	$(PYTHON) scripts/sim_prog.py --vcd $(BUILD)/vcd/$(basename $(notdir $(PROG)))_full.vcd $(PROG)
+	$(PYTHON) scripts/sim_prog.py $(NOISO_ARG) --vcd $(BUILD)/vcd/$(basename $(notdir $(PROG)))_full$(NOISO_SFX).vcd $(PROG)
 endif
 
 # ---------------------------------------------------------------------------
 # make vcd PROG=<file.S|file.elf> : VCD of the Zkne unit only (for toggle-count
 # leakage analysis) -> build/vcd/<name>_zkne.vcd
+# make vcd PROG=... ISOLATE=0      : same, no operand isolation
+#                                    -> build/vcd/<name>_zkne_noiso.vcd
 # ---------------------------------------------------------------------------
 vcd:
 	@test -n "$(PROG)" || (echo "usage: make vcd PROG=<file.S|file.elf>"; exit 1)
-	$(PYTHON) scripts/sim_prog.py --vcd-zkne $(BUILD)/vcd/$(basename $(notdir $(PROG)))_zkne.vcd $(PROG)
+	$(PYTHON) scripts/sim_prog.py $(NOISO_ARG) --vcd-zkne $(BUILD)/vcd/$(basename $(notdir $(PROG)))_zkne$(NOISO_SFX).vcd $(PROG)
 
 # ---------------------------------------------------------------------------
 # make test : run every test, print a pass/fail summary (K=<substring> filters)
@@ -57,7 +67,7 @@ test:
 # make lint : Verilator lint of the synthesizable core (testbench excluded)
 # ---------------------------------------------------------------------------
 lint:
-	$(VERILATOR) --lint-only -Wall --top-module processor \
+	$(VERILATOR) --lint-only -Wall --top-module processor -GZKNE_ISOLATE=$(ISOLATE) \
 	    scripts/lint_waivers.vlt -f $(RTL_F)
 
 clean:

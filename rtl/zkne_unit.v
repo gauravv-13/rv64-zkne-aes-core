@@ -23,15 +23,24 @@
 // Purely combinational: single cycle, fixed latency, and no data-dependent
 // timing (Zkt).
 //
-// Operand isolation: unless a Zkne instruction is in EX (valid), every
-// operand input is forced to zero, so the AES nets do not toggle with
-// ordinary ALU traffic. rs2 and rnum are also zeroed for the instructions
-// that do not use them.
+// Operand isolation (ISOLATE = 1, the default): unless a Zkne instruction
+// is in EX (valid), every operand input is forced to zero, so the AES nets
+// do not toggle with ordinary ALU traffic. rs2 and rnum are also zeroed for
+// the instructions that do not use them.
+//
+// ISOLATE = 0 removes the gating: the operands go straight into the
+// datapath every cycle, the S-box input and result muxes select on op
+// alone, and valid is ignored (the core muxes the result in only for Zkne
+// instructions). This is an ungated unit, as in a core that does not
+// isolate its crypto unit, so leakage can be measured both ways. Results
+// for valid instructions are identical in both modes.
 //
 // One S-box layer of 8 aes_sbox instances is shared: aes64es/aes64esm
 // use all 8, aes64ks1i uses bytes 0..3 (the inputs of bytes 4..7 are 0).
 // ---------------------------------------------------------------------------
-module zkne_unit (
+module zkne_unit #(
+    parameter ISOLATE = 1    // 1: gate the operands with valid; 0: no gating
+) (
     input         valid,     // a (legal) Zkne instruction is in EX
     input  [1:0]  op,        // ZKNE_ES / ZKNE_ESM / ZKNE_KS1I / ZKNE_KS2
     input  [63:0] rs1,
@@ -45,18 +54,20 @@ module zkne_unit (
     localparam [1:0] ZKNE_KS1I = 2'b10;
     localparam [1:0] ZKNE_KS2  = 2'b11;
 
-    wire is_es   = valid && (op == ZKNE_ES);
-    wire is_esm  = valid && (op == ZKNE_ESM);
-    wire is_ks1i = valid && (op == ZKNE_KS1I);
-    wire is_ks2  = valid && (op == ZKNE_KS2);
+    wire en = ISOLATE ? valid : 1'b1;
+
+    wire is_es   = en && (op == ZKNE_ES);
+    wire is_esm  = en && (op == ZKNE_ESM);
+    wire is_ks1i = en && (op == ZKNE_KS1I);
+    wire is_ks2  = en && (op == ZKNE_KS2);
     wire is_round = is_es | is_esm;
 
     // -----------------------------------------------------------------
-    // Operand isolation
+    // Operand isolation (pass-through when ISOLATE = 0)
     // -----------------------------------------------------------------
-    wire [63:0] a    = valid               ? rs1  : 64'b0;
-    wire [63:0] b    = (is_round | is_ks2) ? rs2  : 64'b0;
-    wire [3:0]  rn   = is_ks1i             ? rnum : 4'b0;
+    wire [63:0] a    = (!ISOLATE || valid)               ? rs1  : 64'b0;
+    wire [63:0] b    = (!ISOLATE || is_round || is_ks2)  ? rs2  : 64'b0;
+    wire [3:0]  rn   = (!ISOLATE || is_ks1i)             ? rnum : 4'b0;
 
     // -----------------------------------------------------------------
     // ShiftRows: output bytes 0..7 of ShiftRows of the state {b, a}.

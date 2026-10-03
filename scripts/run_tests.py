@@ -139,12 +139,12 @@ def illegal_reports(stdout):
 
 
 def run_program(src, max_cycles=2000, defines=(), dump_dmem=False, extra=(), expect_done=True,
-                asm_defines=None, tag=""):
+                asm_defines=None, tag="", params=None):
     """Assemble, simulate and return (registers[32], cycles, stdout, dmem bytes or None).
 
     extra: additional plusargs. expect_done=False returns even if the run did
     not end with RESULT: DONE (for tests that check a failing run).
-    asm_defines/tag: see assemble()."""
+    asm_defines/tag: see assemble(). params: see build_sim()."""
     elf = assemble(src, asm_defines, tag)
     img = make_image(elf)
     regs_file = elf.with_suffix(".regs")
@@ -157,9 +157,9 @@ def run_program(src, max_cycles=2000, defines=(), dump_dmem=False, extra=(), exp
         plusargs.append(f"DUMP_DMEM={dmem_file}")
     plusargs += list(extra)
     if expect_done:
-        out = run_sim(build_sim(defines), plusargs)
+        out = run_sim(build_sim(defines, params), plusargs)
     else:
-        out = sh(["vvp", "-n", str(build_sim(defines))] + [f"+{p}" for p in plusargs])
+        out = sh(["vvp", "-n", str(build_sim(defines, params))] + [f"+{p}" for p in plusargs])
     vals = regs_file.read_text().split()
     dmem = None
     if dump_dmem:
@@ -250,13 +250,15 @@ def first_diff(a, b, fmt):
     return f"  lengths differ: core {len(a)}, spike {len(b)}"
 
 
-def lockstep(src, max_cycles=20000, expect_done=True, asm_defines=None, tag="", isa=SPIKE_ISA):
+def lockstep(src, max_cycles=20000, expect_done=True, asm_defines=None, tag="", isa=SPIKE_ISA,
+             params=None):
     """Same ELF on the core and on Spike; compare every register write (order
     and value) and every store. Returns (core reg writes, cycles, detail)."""
     src = pathlib.Path(src)
     log = BUILD / "prog" / (src.stem + tag + ".commits")
     _, cycles, out, _ = run_program(src, max_cycles=max_cycles, expect_done=expect_done,
-                                    extra=[f"COMMITLOG={log}"], asm_defines=asm_defines, tag=tag)
+                                    extra=[f"COMMITLOG={log}"], asm_defines=asm_defines, tag=tag,
+                                    params=params)
     c_regs, c_st = core_commits(log)
     s_regs, s_st, _ = spike_commits(BUILD / "prog" / (src.stem + tag + ".elf"), isa=isa)
     errs = []
@@ -412,8 +414,9 @@ def edge_values():
     return v
 
 
-@test(f"zkne_unit: edge cases + {N_RANDOM} random operands per instruction vs golden model")
-def test_zkne_unit_random():
+def zkne_unit_random(isolate):
+    """Unit testbench, edge + random vectors vs the golden model. valid=0
+    must give 0 with isolation; without it the unit computes op anyway."""
     rng = random.Random(SEED)
     vecs = []                                   # (valid, name, rs1, rs2, rnum)
     edges = edge_values()
@@ -425,16 +428,18 @@ def test_zkne_unit_random():
         for _ in range(N_RANDOM):
             vecs.append((1, name, rng.getrandbits(64), rng.getrandbits(64),
                          rng.randrange(11) if name == "aes64ks1i" else rng.randrange(16)))
-    for _ in range(200):                        # operand isolation: valid=0 -> 0
+    for _ in range(200):                        # valid=0 vectors
         vecs.append((0, rng.choice(list(UNIT_OPS)), rng.getrandbits(64),
                      rng.getrandbits(64), rng.randrange(11)))
 
     d = BUILD / "zkne_unit"
     d.mkdir(parents=True, exist_ok=True)
-    vec_file, out_file, vvp = d / "vectors.txt", d / "results.txt", d / "tb.vvp"
+    vec_file, out_file, vvp = (d / "vectors.txt", d / f"results_iso{isolate}.txt",
+                               d / f"tb_iso{isolate}.vvp")
     vec_file.write_text("".join(f"{v:x} {UNIT_OPS[n]:x} {a:016x} {b:016x} {r:x}\n"
                                 for v, n, a, b, r in vecs))
     sh(["iverilog", "-g2005", "-s", "zkne_unit_tb", "-o", str(vvp),
+        f"-Pzkne_unit_tb.ISOLATE={isolate}",
         str(ROOT / "rtl/zkne_unit.v"), str(ROOT / "rtl/aes_sbox.v"),
         str(ROOT / "tb/zkne_unit_tb.v")])
     out = sh(["vvp", "-n", str(vvp), f"+VEC={vec_file}", f"+OUT={out_file}"])
@@ -443,7 +448,7 @@ def test_zkne_unit_random():
         raise TestFailure(f"{len(got)} results for {len(vecs)} vectors\n{out}")
     fails, per_op = [], {}
     for (v, n, a, b, r), g in zip(vecs, got):
-        exp = golden.OPS[n](a, b, r) if v else 0
+        exp = golden.OPS[n](a, b, r) if v or not isolate else 0
         if v:
             per_op[n] = per_op.get(n, 0) + 1
         if g != exp:
@@ -453,7 +458,17 @@ def test_zkne_unit_random():
         raise TestFailure(f"{len(fails)} mismatches (seed {SEED}), first 10:\n"
                           + "\n".join(fails[:10]))
     return (", ".join(f"{n} {c}" for n, c in per_op.items())
-            + f", valid=0 200; seed {SEED}")
+            + f", valid=0 200 (-> {'0' if isolate else 'op result'}); seed {SEED}")
+
+
+@test(f"zkne_unit: edge cases + {N_RANDOM} random operands per instruction vs golden model")
+def test_zkne_unit_random():
+    return zkne_unit_random(isolate=1)
+
+
+@test("zkne_unit ISOLATE=0: same vectors vs golden model, no operand gating")
+def test_zkne_unit_random_noiso():
+    return zkne_unit_random(isolate=0)
 
 
 @test("zkne: FIPS-197 C.1 AES-128 in assembly (ks1i/ks2 key expansion) + lockstep")
@@ -542,6 +557,24 @@ def test_ctr_demo():
             f"{detail}; " + lockstep(src)[2])
 
 
+@test("ISOLATE=0 core: FIPS-197 C.1, CTR demo, forwarding, random program vs golden + Spike")
+def test_core_noiso():
+    p = {"ZKNE_ISOLATE": "0"}
+    out = []
+    for src in ("tests/zkne/fips197_c1.S", "sw/aes128_ctr.S", "tests/pipeline/fwd_operands.S"):
+        check_expect(ROOT / src, params=p)
+        out.append(f"{pathlib.Path(src).name} ok")
+    src = BUILD / "random" / "random_prog.S"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    sh([sys.executable, str(ROOT / "scripts/gen_random_prog.py"), str(src), str(SEED),
+        str(N_RANDOM_PROG)])
+    exp = json.loads(src.with_suffix(".expect.json").read_text())
+    c_regs, _, detail = lockstep(src, max_cycles=20 * N_RANDOM_PROG, tag="_noiso", params=p)
+    if [list(w) for w in c_regs[2:-3]] != exp["writes"]:
+        raise TestFailure("random program: register writes differ from the golden model")
+    return ", ".join(out) + f"; random program {detail}"
+
+
 def parse_vcd(path):
     """Minimal VCD reader: returns (scopes, signal names, list of (time, {name: value}))
     with the full value set at every timestamp. Names are '<scope path>.<signal>'."""
@@ -578,12 +611,38 @@ def parse_vcd(path):
     return scopes, {n for v in ids.values() for n in v}, frames
 
 
+TOGGLE_NETS = ("a", "b", "sr", "sb_in", "sb_out", "mc", "result")
+
+
+def toggles(frames, net):
+    """Bit flips of net between consecutive VCD frames -> (idle, total).
+    idle counts only frames where the unit's valid is 0 before and after, so
+    the return to zero after an AES instruction is not counted as idle."""
+    unit = "pipe_tb.uut.ZKNE_UNIT."
+    idle = total = 0
+    for (_, prev), (_, cur) in zip(frames, frames[1:]):
+        p, c = prev.get(unit + net), cur.get(unit + net)
+        if p is None or c is None or not set(p + c) <= {"0", "1"}:
+            continue
+        n = bin(int(p, 2) ^ int(c, 2)).count("1")
+        total += n
+        if prev.get(unit + "valid") == "0" and cur.get(unit + "valid") == "0":
+            idle += n
+    return idle, total
+
+
+def zkne_vcd(isolate):
+    """make vcd [ISOLATE=0] on the CTR demo -> (signal names, frames)."""
+    vcd = BUILD / "vcd" / ("aes128_ctr_zkne.vcd" if isolate else "aes128_ctr_zkne_noiso.vcd")
+    vcd.unlink(missing_ok=True)
+    sh(["make", "-s", "vcd", "PROG=sw/aes128_ctr.S", f"ISOLATE={isolate}"])
+    _, names, frames = parse_vcd(vcd)
+    return names, frames
+
+
 @test("vcd: make vcd dumps only the Zkne unit; valid=0 -> S-box inputs, sr, result all 0")
 def test_vcd_zkne():
-    vcd = BUILD / "vcd" / "aes128_ctr_zkne.vcd"
-    vcd.unlink(missing_ok=True)
-    sh(["make", "-s", "vcd", "PROG=sw/aes128_ctr.S"])
-    scopes, names, frames = parse_vcd(vcd)
+    names, frames = zkne_vcd(isolate=1)
     unit = "pipe_tb.uut.ZKNE_UNIT"
     outside = sorted(n for n in names if not n.startswith(unit + "."))
     if outside:
@@ -602,6 +661,21 @@ def test_vcd_zkne():
         raise TestFailure("expected both valid=0 and valid=1 periods")
     return (f"{len(names)} signals, all inside {unit}; {len(idle)} valid=0 timestamps with "
             f"isolated (all-zero) operands, {len(busy)} valid=1")
+
+
+@test("vcd ISOLATE=0: AES nets follow ALU traffic while idle; toggle counts vs ISOLATE=1")
+def test_vcd_zkne_noiso():
+    counts = {}
+    for iso in (1, 0):
+        _, frames = zkne_vcd(iso)
+        t = [toggles(frames, n) for n in TOGGLE_NETS]
+        counts[iso] = (sum(i for i, _ in t), sum(n for _, n in t))
+    if counts[1][0] != 0:
+        raise TestFailure(f"ISOLATE=1: {counts[1][0]} toggles while idle (valid=0 -> 0)")
+    if counts[0][0] == 0:
+        raise TestFailure("ISOLATE=0: no toggles while idle (gating not removed?)")
+    return ("bit toggles on " + "/".join(TOGGLE_NETS) + ", CTR demo, idle/total: "
+            f"ISOLATE=1 {counts[1][0]}/{counts[1][1]}, ISOLATE=0 {counts[0][0]}/{counts[0][1]}")
 
 
 # Every test program that Spike can run (no illegal instructions, no

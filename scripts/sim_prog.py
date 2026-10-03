@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Build and simulate one program on the core (used by make sim / make vcd).
 
-    python3 scripts/sim_prog.py [--vcd-zkne FILE] [--vcd FILE] [--max-cycles N] PROG
+    python3 scripts/sim_prog.py [--vcd-zkne FILE] [--vcd FILE] [--max-cycles N]
+                                [--no-isolate] PROG
 
 PROG is a .S file (assembled with sw/test.h, sw/link.ld) or an ELF linked
 at 0x80000000 that ends with a store to `tohost`. Prints the result line
-and the non-zero registers.
+and the non-zero registers. --no-isolate builds the core with
+ZKNE_ISOLATE=0 (no operand isolation in the Zkne unit).
 """
 import argparse
 import pathlib
@@ -21,6 +23,8 @@ def main():
     ap.add_argument("--vcd-zkne", help="dump only the Zkne unit's signals to this VCD")
     ap.add_argument("--vcd", help="dump all signals to this VCD")
     ap.add_argument("--max-cycles", type=int, default=100000)
+    ap.add_argument("--no-isolate", action="store_true",
+                    help="build the Zkne unit without operand isolation (ZKNE_ISOLATE=0)")
     args = ap.parse_args()
 
     prog = pathlib.Path(args.prog).resolve()
@@ -35,7 +39,8 @@ def main():
             pathlib.Path(opt).parent.mkdir(parents=True, exist_ok=True)
             plusargs.append(f"{name}={pathlib.Path(opt).resolve()}")
     try:
-        out = rt.sh(["vvp", "-n", str(rt.build_sim())] + [f"+{p}" for p in plusargs])
+        vvp = rt.build_sim(params={"ZKNE_ISOLATE": "0"} if args.no_isolate else None)
+        out = rt.sh(["vvp", "-n", str(vvp)] + [f"+{p}" for p in plusargs])
     except rt.TestFailure as e:
         sys.exit(str(e))
     print("".join(l + "\n" for l in out.splitlines() if not l.startswith("VCD info")), end="")

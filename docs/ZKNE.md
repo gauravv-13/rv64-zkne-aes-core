@@ -89,6 +89,15 @@ alone tells the four instructions apart.
   therefore doesn't toggle the AES nets, and a test checks this on the VCD.
   The gating is plain combinational logic. It reduces toggling noise but is
   **not** a masking countermeasure.
+- **Isolation switch:** `parameter ISOLATE` (default 1; `ZKNE_ISOLATE` on
+  `processor` and `pipe_tb`; `make sim/vcd/lint ISOLATE=0`). With
+  `ISOLATE=0`, `a`/`b`/`rn` are `rs1`/`rs2`/`rnum` every cycle, `valid` is
+  ignored, and the S-box input and result muxes select on `op` alone.
+  `op` and `rnum` come from the funct7 and rs2 fields of whatever
+  instruction is in EX. The core still takes the result only for Zkne
+  instructions, so architectural behavior is identical. This models an
+  ungated crypto unit and gives the baseline for "how much does
+  isolation alone reduce leakage".
 - **S-box layer:** one shared layer of 8 `aes_sbox` instances. es and esm
   use all 8; ks1i uses bytes 0..3, and the inputs of bytes 4..7 are 0. To try
   a masked S-box, replace `aes_sbox`, or the generate block `sbox[i]` in
@@ -97,7 +106,7 @@ alone tells the four instructions apart.
 
   | Net | Meaning |
   |---|---|
-  | `a`, `b`, `rn` | Isolated operands |
+  | `a`, `b`, `rn` | Operands (isolated when `ISOLATE=1`) |
   | `sr` | ShiftRows output |
   | `sb_in`, `sb_out` | S-box layer input and output |
   | `sbox[i].u_sbox.in/out` | Each S-box instance |
@@ -144,6 +153,7 @@ Tools used on macOS (Apple Silicon) with Homebrew:
 | `make sim` | Runs the legacy program (`tests/legacy`) and prints its register dump. |
 | `make sim PROG=<file.S\|file.elf>` | Runs a program and writes a full VCD to `build/vcd/`. |
 | `make vcd PROG=<file.S\|file.elf>` | Writes `build/vcd/<name>_zkne.vcd` with **only** the Zkne unit's signals, for toggle-count analysis. |
+| `make vcd PROG=... ISOLATE=0` | Same with operand isolation off: `build/vcd/<name>_zkne_noiso.vcd`. `ISOLATE=0` also applies to `make sim` and `make lint`. |
 | `make lint` | `verilator --lint-only -Wall` on the core. Clean. Intentional cases are waived, with reasons, in `scripts/lint_waivers.vlt`. |
 | `make clean` | Removes `build/`. |
 
@@ -160,7 +170,7 @@ Writing a test program:
   checked by the runner. `sw/link.ld` puts code at `0x80000000`, data at
   `0x80008000` and `tohost` at `0x8000f000`.
 
-### What `make test` runs (28 tests)
+### What `make test` runs (31 tests)
 
 - **Legacy:** the original program, built with `-DLEGACY_AES` and
   `RESET_PC=0`, still gives the original 32 registers and 21 cycles.
@@ -195,6 +205,12 @@ Writing a test program:
 - **Lockstep with Spike:** every program Spike can run (see below).
 - **Demo:** AES-128 CTR against NIST SP 800-38A F.5.1, plus the
   Zkne-unit-only VCD and operand isolation.
+- **`ISOLATE=0`:** the unit vectors again (valid=0 now gives the op's
+  result rather than 0); FIPS-197 C.1, CTR and forwarding EXPECTs, and the
+  random program against golden and Spike on the ungated core; and a VCD
+  test showing the AES nets toggle while idle without isolation and never
+  with it (CTR demo: 0 vs 10,224 idle bit toggles, 31,918 vs 41,970 total
+  on `a/b/sr/sb_in/sb_out/mc/result`).
 
 ## Comparison with Spike
 
